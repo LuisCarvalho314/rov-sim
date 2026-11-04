@@ -1,0 +1,55 @@
+{
+  "unit": "metre",
+  "up_axis": "Z",
+  "tank_dimensions_m": [
+    8.0,
+    5.0,
+    3.0
+  ],
+  "waterline_z_m": 2.85,
+  "before_usd": "tank_before_rtx.usda",
+  "after_usd": "tank_after_rtx.usda",
+  "changed_prim": "/World/Changes/MovableCrate",
+  "before_position_m": [
+    1.15,
+    -0.65,
+    0.3
+  ],
+  "after_position_m": [
+    1.65,
+    -0.65,
+    0.3
+  ],
+  "displacement_m": 0.5,
+  "camera_rig_prim": "/World/CameraRig",
+  "left_camera_prim": "/World/CameraRig/Left",
+  "right_camera_prim": "/World/CameraRig/Right",
+  "image_wh": [
+    752,
+    480
+  ],
+  "baseline_m": 0.38,
+  "K_approx": [
+    [
+      537.1428571428571,
+      0.0,
+      376.0
+    ],
+    [
+      0.0,
+      537.1428571428571,
+      240.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "caveats": [
+    "K is estimated from USD camera attributes; verify against camera_info.",
+    "RTX caustics settings are app state, not guaranteed by the saved USD.",
+    "OceanSim UW_Camera is required for underwater attenuation/backscatter.",
+    "The two USD stages contain identical background, lights and water geometry."
+  ]
+}

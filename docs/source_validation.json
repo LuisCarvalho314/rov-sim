@@ -1,0 +1,161 @@
+{
+  "checked_on": "2026-11-04",
+  "scope": "Source inspection and CPU checks only. No Kit/GPU execution or USD binary inspection was possible.",
+  "isaacsim_version": "5.0.0-rc.45+mr.0.1791e148.local",
+  "oceansim_package_version": "1.0.0",
+  "sources": [
+    {
+      "path": "/mnt/c/isaacsim/_build/windows-x86_64/release/extsUser/OceanSim/isaacsim/oceansim/sensors/UW_Camera.py",
+      "sha256": "54b6c3dc83026ca1792b094fefc3039b690ba0bbdeb46f3007a65a0d6b0a86e6"
+    },
+    {
+      "path": "/mnt/c/isaacsim/_build/windows-x86_64/release/extsUser/OceanSim/isaacsim/oceansim/watersurface/WaterSurface.py",
+      "sha256": "d35ad294807c65fa7cc52b3bf52fc1a94aef19fd55af6963cffd603a6b3a76a7"
+    },
+    {
+      "path": "/mnt/c/isaacsim/source/extensions/isaacsim.sensors.camera/isaacsim/sensors/camera/camera.py",
+      "sha256": "fc6e07f0e06a9b3846d44acc043e3f4f8f62c4b79b45878bd33951e5c2487de3"
+    },
+    {
+      "path": "/mnt/c/isaacsim/source/extensions/isaacsim.simulation_app/isaacsim/simulation_app/simulation_app.py",
+      "sha256": "5e771a552596ae8d697f74fc3c6803f7c22252ceafbc672cd4f2d02d1f47f6f6"
+    },
+    {
+      "path": "/mnt/c/isaacsim/_build/windows-x86_64/release/extscache/omni.kit.property.light-1.0.12+8131b85d/omni/kit/property/light/scripts/prim_light_widget.py",
+      "sha256": "dbecb58afbaa330bb1f8e92aff9e3c521008015400df92b82e3e124cd6b52e07"
+    },
+    {
+      "path": "/mnt/c/isaacsim/_build/windows-x86_64/release/extscache/omni.replicator.core-1.12.16+107.3.1.wx64.r.cp311/omni/replicator/core/scripts/orchestrator.py",
+      "sha256": "85b8df30ce8414ec2646ecc49e5e3090606219efc9125e639d5f3a2e7cab255c"
+    },
+    {
+      "path": "rov_tank_builder.py",
+      "sha256": "0cd6840e55e1e1971bf2c8d7a6eee3fafaa11174c10bdcdb9285faafcb1f983d"
+    },
+    {
+      "path": "/mnt/c/rov_sim/rov_stereo_preview.py",
+      "sha256": "6fe6b0e9ce3404e91e5a2b2d9930741393daa30a48f59141cc4c9e8a3def407c"
+    }
+  ],
+  "api_checks": [
+    {
+      "api": "UW_Camera.__init__",
+      "parameters": [
+        "self",
+        "prim_path",
+        "name",
+        "frequency",
+        "dt",
+        "resolution",
+        "position",
+        "orientation",
+        "translation",
+        "render_product_path"
+      ]
+    },
+    {
+      "api": "UW_Camera.initialize",
+      "parameters": [
+        "self",
+        "UW_param",
+        "depth_noise_sigma",
+        "max_range",
+        "viewport",
+        "writing_dir",
+        "UW_yaml_path",
+        "physics_sim_view"
+      ]
+    },
+    {
+      "api": "UW_Camera.render",
+      "parameters": [
+        "self"
+      ]
+    },
+    {
+      "api": "UW_Camera.close",
+      "parameters": [
+        "self"
+      ]
+    },
+    {
+      "api": "WaterSurface.__init__",
+      "parameters": [
+        "self",
+        "prim_path",
+        "name",
+        "position",
+        "translation",
+        "orientation",
+        "scale",
+        "size",
+        "dim",
+        "visible",
+        "visual_material",
+        "enable_caustics",
+        "cast_shadows"
+      ]
+    },
+    {
+      "api": "WaterSurface.deform",
+      "parameters": [
+        "self",
+        "time",
+        "amplitude",
+        "cameraPos",
+        "clipmapCellSize",
+        "direction",
+        "directionality",
+        "scale",
+        "waterDepth",
+        "windSpeed"
+      ]
+    },
+    {
+      "api": "WaterSurface.set_caustics",
+      "parameters": [
+        "self",
+        "photonCountMultiplier",
+        "photonMaxBounces",
+        "positionPhi",
+        "normalPhi",
+        "eawFilteringSteps"
+      ]
+    },
+    {
+      "api": "Camera.destroy",
+      "parameters": [
+        "self"
+      ]
+    },
+    {
+      "api": "Camera.get_intrinsics_matrix",
+      "parameters": [
+        "self",
+        "device",
+        "backend_utils_cls"
+      ]
+    }
+  ],
+  "light_caustics_property": "light:enableCaustics",
+  "legacy_geometry_ast_preserved": [
+    "group",
+    "rgb",
+    "box",
+    "pipe",
+    "build_fixed_equipment",
+    "build_changed_object"
+  ],
+  "asset_verified": {
+    "path": "/mnt/c/isaacsim-assets/OceanSim_assets/Bluerov/BROV_low.usd",
+    "format": "PXR-USDC",
+    "bytes": 43692335,
+    "units_and_heading": "Require runtime inspection"
+  },
+  "replicator_step_parameters_verified": [
+    "rt_subframes",
+    "pause_timeline",
+    "delta_time",
+    "wait_for_render"
+  ]
+}
