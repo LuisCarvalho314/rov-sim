@@ -126,26 +126,36 @@ class StereoCameras:
         if self._closed:
             return
         self._closed = True
-        for side, cam in self.cameras.items():
-            # close() detaches OceanSim's annotators; destroy() is inherited
-            # from Isaac Camera and releases its own annotators/render product.
-            try:
-                if hasattr(cam, "_rgba_annot") and hasattr(cam, "_depth_annot"):
-                    cam.close()
-                else:
-                    self._detach_partial(cam)
-            except Exception as error:
-                warnings.warn(f"{side} OceanSim cleanup: {error}")
-                self._detach_partial(cam)
-            finally:
-                # Camera 5.0 also holds ReferenceTime and event subscriptions
-                # outside destroy(). Release these while Kit is still alive.
-                reference = getattr(cam, "_fabric_time_annotator", None)
-                try:
-                    if reference is not None:
-                        reference.detach()
-                except Exception as error:
-                    warnings.warn(f"{side} ReferenceTime cleanup: {error}")
+        cameras = tuple(self.cameras.items())
+        try:
+            # OceanSim.close() also calls AnnotatorCache.clear with an annotator
+            # object, although Replicator's cache expects an integer ID. Its
+            # cache is global, so detach each camera explicitly instead.
+            for side, cam in cameras:
+                for name in ("_rgba_annot", "_depth_annot", "_fabric_time_annotator"):
+                    annotator = getattr(cam, name, None)
+                    product = getattr(cam, "_render_product_path", None)
+                    if annotator is None or not product:
+                        continue
+                    try:
+                        if product in (getattr(annotator, "_render_products", None) or ()):
+                            annotator.detach(product)
+                    except Exception as error:
+                        warnings.warn(f"{side} {name} cleanup: {error}")
+                if getattr(cam, "_viewport", False) and hasattr(cam, "wrapped_ui_elements"):
+                    try:
+                        cam.ui_destroy()
+                    except Exception as error:
+                        warnings.warn(f"{side} OceanSim viewport cleanup: {error}")
+                # Isaac Camera.initialize() also attaches its own RGB annotator.
+                # Detach these on both products before either product is removed.
+                for name in tuple(getattr(cam, "_custom_annotators", ())):
+                    try:
+                        cam.detach_annotator(name)
+                    except Exception as error:
+                        warnings.warn(f"{side} Isaac {name} cleanup: {error}")
+            # Camera.destroy() owns its inherited RGB annotator and render product.
+            for side, cam in cameras:
                 try:
                     cam.destroy()
                 except Exception as error:
@@ -153,14 +163,5 @@ class StereoCameras:
                 for name in ("_acquisition_callback", "_stage_open_callback", "_timer_reset_callback"):
                     if hasattr(cam, name):
                         setattr(cam, name, None)
-        self.cameras.clear()
-
-    @staticmethod
-    def _detach_partial(cam):
-        for name in ("_rgba_annot", "_depth_annot"):
-            annotator = getattr(cam, name, None)
-            if annotator is not None:
-                try:
-                    annotator.detach(cam._render_product_path)
-                except Exception as error:
-                    warnings.warn(f"Partial OceanSim annotator cleanup: {error}")
+        finally:
+            self.cameras.clear()

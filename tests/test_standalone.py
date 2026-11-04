@@ -12,6 +12,7 @@ import sys
 import tempfile
 import types
 import unittest
+import warnings
 import zlib
 from pathlib import Path
 from unittest.mock import patch
@@ -187,9 +188,8 @@ class RecordingTests(unittest.TestCase):
 
 
 class CameraCleanupTests(unittest.TestCase):
-    def test_camera_cleanup_releases_render_product_after_oceansim_close_fails(self):
-        # Exercise the actual adapter without Kit. These API doubles isolate
-        # failure recovery; they do not validate USD or GPU behavior.
+    @staticmethod
+    def adapter(cameras):
         fake_pxr = types.ModuleType("pxr")
         fake_pxr.Gf = fake_pxr.Usd = fake_pxr.UsdGeom = object()
         robot = types.ModuleType("robots.bluerov")
@@ -198,35 +198,102 @@ class CameraCleanupTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("_stereo_cleanup_check", ROOT / "sensors/stereo.py")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+        adapter = module.StereoCameras.__new__(module.StereoCameras)
+        adapter.cameras, adapter._closed = cameras, False
+        return adapter
 
+    def test_two_phase_cleanup_and_second_close(self):
         events = []
 
         class Annotator:
-            def detach(self, *args):
-                events.append("detach")
+            def __init__(self, side, name):
+                self.side, self.name = side, name
+                self._render_products = [f"/{side}"]
+
+            def detach(self, product):
+                events.append(("detach", self.side, self.name))
+                self._render_products.remove(product)
 
         class Camera:
-            _rgba_annot = _depth_annot = _fabric_time_annotator = Annotator()
-            _render_product_path = "/Render/Product"
-            _acquisition_callback = _stage_open_callback = _timer_reset_callback = object()
+            def __init__(self, side):
+                self.side = side
+                self._render_product_path = f"/{side}"
+                self._rgba_annot = Annotator(side, "rgba")
+                self._depth_annot = Annotator(side, "depth")
+                self._fabric_time_annotator = Annotator(side, "reference")
+                self._custom_annotators = {"rgb": Annotator(side, "isaac_rgb")}
+                self._viewport = True
+                self.wrapped_ui_elements = []
+                self._acquisition_callback = object()
+                self._stage_open_callback = object()
+                self._timer_reset_callback = object()
 
             def close(self):
-                events.append("close")
-                raise RuntimeError("injected annotator failure")
+                self.fail("OceanSim.close must not run")
+
+            def ui_destroy(self):
+                events.append(("preview", self.side))
+
+            def detach_annotator(self, name):
+                self._custom_annotators.pop(name).detach(self._render_product_path)
 
             def destroy(self):
-                events.append("destroy")
+                events.append(("destroy", self.side))
 
-        cam = Camera()
-        adapter = module.StereoCameras.__new__(module.StereoCameras)
-        adapter.cameras, adapter._closed = {"left": cam}, False
-        with self.assertWarnsRegex(UserWarning, "injected annotator failure"):
-            adapter.close()
+        cameras = {side: Camera(side) for side in ("left", "right")}
+        adapter = self.adapter(cameras)
         adapter.close()
-        self.assertEqual(events, ["close", "detach", "detach", "detach", "destroy"])
-        self.assertIsNone(cam._acquisition_callback)
-        self.assertIsNone(cam._stage_open_callback)
-        self.assertIsNone(cam._timer_reset_callback)
+        self.assertEqual([event for event in events if event[0] == "detach"],
+                         [("detach", side, name) for side in ("left", "right")
+                          for name in ("rgba", "depth", "reference", "isaac_rgb")])
+        self.assertLess(max(i for i, event in enumerate(events) if event[0] == "detach"),
+                        min(i for i, event in enumerate(events) if event[0] == "destroy"))
+        self.assertEqual(events[-2:], [("destroy", "left"), ("destroy", "right")])
+        adapter.close()
+        self.assertEqual(events[-2:], [("destroy", "left"), ("destroy", "right")])
+        for cam in cameras.values():
+            self.assertIsNone(cam._acquisition_callback)
+            self.assertIsNone(cam._stage_open_callback)
+            self.assertIsNone(cam._timer_reset_callback)
+        self.assertEqual(adapter.cameras, {})
+
+    def test_partial_camera_and_failure_still_release_other_camera(self):
+        events = []
+
+        class Annotator:
+            def __init__(self, products, fail=False):
+                self._render_products = products
+                self.fail = fail
+
+            def detach(self, product):
+                events.append(("detach", product))
+                if self.fail:
+                    raise RuntimeError("injected detach failure")
+
+        class Camera:
+            _viewport = False
+
+            def __init__(self, side, partial=False):
+                self.side = side
+                self._render_product_path = f"/{side}"
+                self._rgba_annot = Annotator([f"/{side}"], fail=side == "left")
+                if not partial:
+                    self._depth_annot = Annotator([f"/{side}"])
+
+            def destroy(self):
+                events.append(("destroy", self.side))
+                if self.side == "left":
+                    raise RuntimeError("injected destroy failure")
+
+        adapter = self.adapter({"left": Camera("left", partial=True), "right": Camera("right")})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            adapter.close()
+        messages = [str(item.message) for item in caught]
+        self.assertTrue(any("injected detach failure" in message for message in messages))
+        self.assertTrue(any("injected destroy failure" in message for message in messages))
+        self.assertIn(("detach", "/right"), events)
+        self.assertEqual(events[-2:], [("destroy", "left"), ("destroy", "right")])
         self.assertEqual(adapter.cameras, {})
 
 

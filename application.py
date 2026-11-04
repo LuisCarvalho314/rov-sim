@@ -161,13 +161,13 @@ def run(app, cfg, args, extension, headless):
         # Run all cleanup while Kit's renderer and extension manager still live.
         if recorder is not None:
             recorder.close()
+        if stereo is not None:
+            stereo.close()
         try:
             rep.orchestrator.stop()
             rep.orchestrator.wait_until_complete()
         except Exception as error:
             warnings.warn(f"Replicator cleanup: {error}")
-        if stereo is not None:
-            stereo.close()
         if water is not None:
             water.close()
         timeline.stop()
