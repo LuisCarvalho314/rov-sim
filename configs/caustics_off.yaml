@@ -1,0 +1,205 @@
+{
+    "runtime":  {
+                    "backend":  "d3d12",
+                    "renderer":  "RaytracedLighting",
+                    "oceansim_extension":  null,
+                    "experience":  null,
+                    "extra_args":  [
+
+                                   ]
+                },
+    "simulation":  {
+                       "fps":  30,
+                       "seed":  7,
+                       "warmup_frames":  8,
+                       "rt_subframes":  4,
+                       "readiness_attempts":  30,
+                       "headless_frames":  120
+                   },
+    "tank":  {
+                 "dimensions_m":  [
+                                      8.0,
+                                      5.0,
+                                      3.0
+                                  ],
+                 "wall_thickness_m":  0.2,
+                 "colour":  [
+                                0.38,
+                                0.42,
+                                0.43
+                            ]
+             },
+    "lighting":  {
+                     "positions_xy_m":  [
+                                            [
+                                                -1.25,
+                                                -0.8
+                                            ],
+                                            [
+                                                1.8,
+                                                1.0
+                                            ]
+                                        ],
+                     "height_above_tank_m":  0.35,
+                     "size_m":  [
+                                    2.2,
+                                    1.5
+                                ],
+                     "intensity":  950.0,
+                     "colour":  [
+                                    0.83,
+                                    0.92,
+                                    1.0
+                                ]
+                 },
+    "robot":  {
+                  "asset":  "Bluerov/BROV_low.usd",
+                  "position_m":  [
+                                     -3.1,
+                                     0.0,
+                                     1.35
+                                 ],
+                  "rotation_xyz_deg":  [
+                                           0.0,
+                                           0.0,
+                                           0.0
+                                       ],
+                  "model":  {
+                                "position_m":  [
+                                                   0.0,
+                                                   0.0,
+                                                   0.0
+                                               ],
+                                "rotation_xyz_deg":  [
+                                                         0.0,
+                                                         0.0,
+                                                         0.0
+                                                     ],
+                                "scale":  [
+                                              1.0,
+                                              1.0,
+                                              1.0
+                                          ]
+                            }
+              },
+    "stereo":  {
+                   "resolution":  [
+                                      752,
+                                      480
+                                  ],
+                   "baseline_m":  0.38,
+                   "focal_length_mm":  15.0,
+                   "horizontal_aperture_mm":  21.0,
+                   "clipping_range_m":  [
+                                            0.05,
+                                            25.0
+                                        ],
+                   "preview":  true,
+                   "mount":  {
+                                 "position_m":  [
+                                                    0.45,
+                                                    0.0,
+                                                    0.05
+                                                ],
+                                 "rotation_xyz_deg":  [
+                                                          90.0,
+                                                          0.0,
+                                                          -90.0
+                                                      ]
+                             }
+               },
+    "underwater":  {
+                       "backscatter_value":  [
+                                                 0.0,
+                                                 0.31,
+                                                 0.24
+                                             ],
+                       "atten_coeff":  [
+                                           0.05,
+                                           0.05,
+                                           0.05
+                                       ],
+                       "backscatter_coeff":  [
+                                                 0.05,
+                                                 0.05,
+                                                 0.2
+                                             ],
+                       "max_range_m":  12.0,
+                       "depth_noise_sigma":  0.0
+                   },
+    "water":  {
+                  "height_m":  2.85,
+                  "size_m":  [
+                                 7.6,
+                                 4.6
+                             ],
+                  "grid_resolution":  [
+                                          80,
+                                          50
+                                      ],
+                  "cast_shadows":  true,
+                  "wave":  {
+                               "animated":  false,
+                               "amplitude_m":  0.06,
+                               "initial_time_s":  0.0,
+                               "wind_speed_m_s":  2.0,
+                               "scale":  1.0
+                           }
+              },
+    "rtx":  {
+                "caustics":  false,
+                "photon_count_multiplier":  40,
+                "photon_max_bounces":  4,
+                "filter_steps":  5,
+                "settings":  {
+                                 "/rtx/post/aa/op":  0
+                             }
+            },
+    "changes":  {
+                    "before_position_m":  [
+                                              1.15,
+                                              -0.65,
+                                              0.3
+                                          ],
+                    "displacement_m":  [
+                                           0.5,
+                                           0.0,
+                                           0.0
+                                       ]
+                },
+    "experiment":  {
+                       "frames_per_pass":  60,
+                       "trajectory":  [
+                                          {
+                                              "frame":  0,
+                                              "position_m":  [
+                                                                 -3.1,
+                                                                 0.0,
+                                                                 1.35
+                                                             ],
+                                              "rotation_xyz_deg":  [
+                                                                       0.0,
+                                                                       0.0,
+                                                                       0.0
+                                                                   ]
+                                          },
+                                          {
+                                              "frame":  59,
+                                              "position_m":  [
+                                                                 -2.6,
+                                                                 0.0,
+                                                                 1.35
+                                                             ],
+                                              "rotation_xyz_deg":  [
+                                                                       0.0,
+                                                                       0.0,
+                                                                       0.0
+                                                                   ]
+                                          }
+                                      ]
+                   },
+    "output":  {
+                   "directory":  "outputs",
+                   "record_images":  false
+               }
+}

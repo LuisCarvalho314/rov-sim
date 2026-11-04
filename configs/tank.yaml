@@ -61,7 +61,7 @@
     "grid_resolution": [80, 50],
     "cast_shadows": true,
     "wave": {
-      "animated": false,
+      "animated": true,
       "amplitude_m": 0.06,
       "initial_time_s": 0.0,
       "wind_speed_m_s": 2.0,
@@ -88,6 +88,14 @@
   },
   "output": {
     "directory": "outputs",
-    "record_images": false
+    "record_images": false,
+    "preview": {
+      "enabled": false,
+      "fps": 30,
+      "codec": "libx264",
+      "crf": 20,
+      "preset": "medium",
+      "ffmpeg_executable": null
+    }
   }
 }

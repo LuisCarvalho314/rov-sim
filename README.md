@@ -11,6 +11,7 @@ Implementation and CPU checks are complete. Two earlier Windows runs completed 1
 - Existing OceanSim installation. Its inspected manifest reports **1.0.0**. The actual `UW_Camera`, `WaterSurface`, asset registration and local Isaac Sim/Kit sources determine this implementation. No OceanSim source files are modified.
 - OceanSim's registered assets, including `Bluerov/BROV_low.usd`, and its `demo/water_material/Water.mdl` material.
 - Packages already required by Isaac Sim/OceanSim: NumPy, Warp, Replicator and PyYAML. No separate virtual environment, C++, ROS 2 integration, OpenCV or image-writing package is required.
+- Optional MP4 previews require FFmpeg on `PATH`, including the `libx264` encoder, or an executable path in `output.preview.ffmpeg_executable`. On Windows, install an FFmpeg build with libx264 and check `ffmpeg -encoders`.
 
 The active extension found here is `C:\isaacsim\_build\windows-x86_64\release\extsUser\OceanSim`. An identical camera implementation exists in `C:\isaacsim-backup\extsUser\OceanSim`. Prefer the active extension. The old stereo preview was read from `C:\rov_sim\rov_stereo_preview.py`; that directory and all existing generated scenes are untouched.
 
@@ -39,6 +40,9 @@ $env:OCEANSIM_EXT_PATH = 'C:\isaacsim\_build\windows-x86_64\release\extsUser\Oce
 
 # Repeatable before/after inspection and paired PNG/pose capture.
 & $python run.py --scene tank --experiment change_detection --mode headless --record
+
+# Record PNGs and automatically encode stereo plus before/after MP4 previews.
+& $python run.py --scene tank --experiment change_detection --headless --frames 60 --record --preview-mp4
 ```
 
 For a packaged installation with `python.bat` directly in `C:\isaacsim`:
@@ -78,7 +82,9 @@ Relative paths resolve against this repository, even from another working direct
 | `rtx` | Photon budget/bounces/filtering and registered RTX setting overrides |
 | `changes` | Reference crate position and displacement vector |
 | `experiment` | Frames per pass and frame-indexed vehicle waypoints |
-| `output` | Output root and optional paired PNG recording |
+| `output` | Output root, paired PNG recording and optional MP4 preview settings |
+
+`output.preview.enabled` defaults to `false`; `--preview-mp4` enables it for one run. Preview generation requires `--record` or `output.record_images=true`. Configure `output.preview.fps` (default 30), `crf` (default 20), `preset` (default `medium`), and optional `ffmpeg_executable`. The H.264 codec is `libx264`. Preview frame rate changes playback speed only; simulation timing and PNG timestamps stay unchanged.
 
 Examples of individual edits in the existing file: set `water.wave.animated` to `true`, `water.wave.amplitude_m` to `0.03`, `underwater.atten_coeff` to `[0.12, 0.06, 0.03]`, or `output.directory` to `"${ROV_OUTPUT_ROOT}/inspection"`. When changing tank dimensions, resize `water.size_m` and check fixed equipment: its preserved fixture coordinates are designed for the 8 × 5 m tank and do not automatically rescale.
 
@@ -140,8 +146,15 @@ tank_after_rtx.usda             displaced-crate snapshot, for experiments
 before/poses.jsonl              frame, logical time and ground truth
 before/left/000000.png          present with --record
 before/right/000000.png
+before/stereo_preview.mp4     with --record --preview-mp4
 after/...                      second experiment pass
+after/stereo_preview.mp4      with --record --preview-mp4 in experiments
+comparison_preview.mp4        before/after left-camera comparison in experiments
 ```
+
+Stereo previews place left and right frames side by side. The default 752 × 480 source yields a 1504 × 480 MP4. The comparison preview places corresponding before and after **left-camera** frames side by side, also 1504 × 480 at the default resolution. FFmpeg runs after all PNGs and pose files have been written. Missing indices, mismatched pass timestamps and FFmpeg errors fail preview generation and are recorded in `status.json`; existing PNGs and metadata remain available. Existing MP4s are not overwritten.
+
+H.264 compression is for visual inspection only. Use the original lossless PNGs and `poses.jsonl` for scientific analysis. MP4s preserve the configured spatial resolution but are lossy, and their frame rate can differ from the simulation rate. Preview generation requires installed FFmpeg/libx264 and adequate free disk space; it does not create previews for an unbounded interactive run until that recording ends.
 
 The experiment constructs one stage. Each pass sets the crate parent translation, resets the vehicle trajectory and wave phase, exports the initial scene, and warms rendering with the same number of frames. Snapshots share background, initial vehicle pose and calibration. BlueROV and MDL references remain external, so snapshots require those assets to stay available.
 
@@ -165,7 +178,7 @@ Geometry, trajectory, phase and seed are deterministic. RTX photon sampling, den
 | `sensors/stereo.py` | Parallel cameras, calibration and `UW_Camera` adapter/cleanup |
 | `environments/underwater.py` | Surface, deformation and verified RTX controls |
 | `experiments/change_detection.py` | Crate displacement and repeatable trajectory |
-| `recording.py` | Unique directories, metadata, poses and paired PNGs |
+| `recording.py`, `preview.py` | Unique directories, metadata, poses, paired PNGs and post-capture MP4s |
 
 Add objects in `scenes/equipment.py` using `box`, `pipe` or USD references. Group meshes for each movable object under one Xform and change that parent between passes. Builders run once; do not add transform operations or recreate geometry in the render loop. Simple primitives/display colours preserve the original appearance; production inspection surfaces may need textures.
 

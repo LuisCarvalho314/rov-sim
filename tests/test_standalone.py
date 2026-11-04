@@ -6,6 +6,7 @@ import io
 import importlib.util
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from unittest.mock import patch
 from config import ROOT, find_oceansim_extension, load_config, resolve_path, validate_config
 from experiments.change_detection import object_position, trajectory_pose
 from recording import PoseRecorder, create_run_directory, write_png
+from preview import ffmpeg_command, generate_previews
 import run
 import startup
 
@@ -59,6 +61,17 @@ class ConfigurationTests(unittest.TestCase):
         self.cfg["experiment"]["trajectory"][1]["frame"] = 0
         with self.assertRaisesRegex(ValueError, "strictly increasing"):
             validate_config(self.cfg)
+
+    def test_preview_defaults_off_and_requires_recording(self):
+        self.assertFalse(self.cfg["output"]["preview"]["enabled"])
+        self.cfg["output"]["preview"]["enabled"] = True
+        with self.assertRaisesRegex(ValueError, "requires PNG recording"):
+            validate_config(self.cfg)
+        self.cfg["output"]["record_images"] = True
+        validate_config(self.cfg)
+        with self.assertRaisesRegex(ValueError, "requires PNG recording"):
+            run.main(["--validate-only", "--preview-mp4"])
+        self.assertEqual(run.main(["--validate-only", "--record", "--preview-mp4"]), 0)
 
     def test_extension_discovery_uses_existing_directory(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -185,6 +198,116 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual((line["frame"], line["time_s"], line["images"]), (3, 0.1, {}))
             with self.assertRaises(FileExistsError):
                 PoseRecorder(first / "before", images=False)
+
+
+class PreviewTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = load_config()["output"]["preview"]
+        self.folder = tempfile.TemporaryDirectory(prefix="preview space ")
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+
+    def make_pass(self, name, indices=(0, 1), times=None):
+        directory = self.root / name
+        for side in ("left", "right"):
+            (directory / side).mkdir(parents=True)
+            for index in indices:
+                (directory / side / f"{index:06d}.png").write_bytes(b"original PNG")
+        if times is None:
+            times = [index / 30 for index in indices]
+        (directory / "poses.jsonl").write_text("".join(json.dumps({"frame": index, "time_s": time}) + "\n"
+                                                   for index, time in zip(indices, times)), encoding="utf-8")
+        return directory
+
+    def fake_ffmpeg(self, command, **kwargs):
+        self.assertIsInstance(command, list)
+        Path(command[-1]).write_bytes(b"video")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    def test_command_stacks_full_resolution_and_handles_spaces(self):
+        before = self.make_pass("before")
+        command = ffmpeg_command("C:/Program Files/ffmpeg/bin/ffmpeg.exe", before / "left", before / "right",
+                                 before / "stereo_preview.mp4", self.cfg)
+        self.assertEqual(command[0], "C:/Program Files/ffmpeg/bin/ffmpeg.exe")
+        self.assertIn(str(before / "left" / "%06d.png"), command)
+        self.assertIn(str(before / "right" / "%06d.png"), command)
+        self.assertEqual(command[command.index("-filter_complex") + 1], "[0:v][1:v]hstack=inputs=2[v]")
+        self.assertEqual(command[command.index("-pix_fmt") + 1], "yuv420p")
+        self.assertEqual(command[command.index("-movflags") + 1], "+faststart")
+        self.assertIn("-n", command)
+        self.assertNotIn("scale", " ".join(command))
+
+    def test_stereo_and_comparison_use_correct_inputs_once(self):
+        self.make_pass("before")
+        self.make_pass("after")
+        original = (self.root / "before/left/000000.png").read_bytes()
+        with patch("preview.subprocess.run", side_effect=self.fake_ffmpeg) as mock_run:
+            result = generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "C:/Program Files/ffmpeg.exe"})
+        self.assertEqual(mock_run.call_count, 3)
+        self.assertEqual(set(result), {"before_stereo", "after_stereo", "comparison"})
+        comparison = mock_run.call_args_list[2].args[0]
+        self.assertIn(str(self.root / "before/left/%06d.png"), comparison)
+        self.assertIn(str(self.root / "after/left/%06d.png"), comparison)
+        self.assertNotIn(str(self.root / "before/right/%06d.png"), comparison)
+        self.assertEqual((self.root / "before/left/000000.png").read_bytes(), original)
+
+    def test_missing_or_mismatched_frames_and_timestamps_fail_before_encoding(self):
+        before = self.make_pass("before")
+        self.make_pass("after")
+        (before / "right/000001.png").unlink()
+        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "nonconsecutive|indices/counts"):
+            generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
+        mock_run.assert_not_called()
+        (before / "right/000001.png").write_bytes(b"original PNG")
+        (self.root / "after/poses.jsonl").write_text(json.dumps({"frame": 0, "time_s": 1}) + "\n" +
+                                                      json.dumps({"frame": 1, "time_s": 2}) + "\n")
+        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "timestamps differ"):
+            generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
+        mock_run.assert_not_called()
+
+    def test_before_after_frame_counts_must_match(self):
+        self.make_pass("before")
+        self.make_pass("after", indices=(0,))
+        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "Before/after PNG frame indices or counts differ"):
+            generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
+        mock_run.assert_not_called()
+
+    def test_ffmpeg_failure_and_existing_video(self):
+        before = self.make_pass("before")
+        with patch("preview.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "encoder unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "encoder unavailable"):
+                generate_previews(self.root, ("before",), self.cfg | {"ffmpeg_executable": "ffmpeg"})
+        self.assertEqual((before / "left/000000.png").read_bytes(), b"original PNG")
+        (before / "stereo_preview.mp4").write_bytes(b"old video")
+        with patch("preview.subprocess.run") as mock_run, self.assertRaises(FileExistsError):
+            generate_previews(self.root, ("before",), self.cfg | {"ffmpeg_executable": "ffmpeg"})
+        mock_run.assert_not_called()
+        self.assertEqual((before / "stereo_preview.mp4").read_bytes(), b"old video")
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg and ffprobe required")
+    def test_real_encode_has_h264_side_by_side_dimensions(self):
+        class Row:
+            def tobytes(self):
+                return bytes([40, 80, 120] * 2)
+
+        class Frame:
+            dtype, ndim, shape = "uint8", 3, (2, 2, 3)
+
+            def __iter__(self):
+                return iter((Row(), Row()))
+
+        before = self.make_pass("before")
+        for side in ("left", "right"):
+            for index in (0, 1):
+                write_png(before / side / f"{index:06d}.png", Frame())
+        generate_previews(self.root, ("before",), self.cfg)
+        video = before / "stereo_preview.mp4"
+        probe = subprocess.run([shutil.which("ffprobe"), "-v", "error", "-select_streams", "v:0",
+                                "-show_entries", "stream=codec_name,width,height,nb_frames", "-of", "json", str(video)],
+                               capture_output=True, text=True, check=True)
+        stream = json.loads(probe.stdout)["streams"][0]
+        self.assertEqual((stream["codec_name"], stream["width"], stream["height"], stream["nb_frames"]),
+                         ("h264", 4, 2, "2"))
 
 
 class CameraCleanupTests(unittest.TestCase):

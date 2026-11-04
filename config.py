@@ -60,6 +60,21 @@ def validate_config(c):
                              (c["output"], "record_images")):
             if not isinstance(section[key], bool):
                 raise ValueError(f"{key} must be true or false")
+        preview = c["output"]["preview"]
+        if not isinstance(preview["enabled"], bool):
+            raise ValueError("output.preview.enabled must be true or false")
+        if preview["enabled"] and not c["output"]["record_images"]:
+            raise ValueError("MP4 preview requires PNG recording; use --record or output.record_images=true")
+        number(preview["fps"], "output.preview.fps")
+        integer(preview["crf"], "output.preview.crf", 0)
+        if preview["crf"] > 51:
+            raise ValueError("output.preview.crf must be at most 51")
+        if preview["codec"] != "libx264":
+            raise ValueError("output.preview.codec must be libx264")
+        if preview["preset"] not in ("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"):
+            raise ValueError("output.preview.preset is not a supported libx264 preset")
+        if preview["ffmpeg_executable"] is not None and (not isinstance(preview["ffmpeg_executable"], str) or not preview["ffmpeg_executable"].strip()):
+            raise ValueError("output.preview.ffmpeg_executable must be a nonempty path or null")
         if not isinstance(c["runtime"]["extra_args"], list) or not all(isinstance(v, str) for v in c["runtime"]["extra_args"]):
             raise ValueError("runtime.extra_args must be a list of strings")
         if not isinstance(c["rtx"]["settings"], dict):

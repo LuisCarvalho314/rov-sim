@@ -16,6 +16,7 @@ def parse_args(argv=None):
     parser.add_argument("--experiment", choices=["change_detection"])
     parser.add_argument("--frames", type=int, help="Frames per pass; 0 keeps interactive preview open")
     parser.add_argument("--record", action="store_true", help="Record paired underwater PNGs and ground truth")
+    parser.add_argument("--preview-mp4", action="store_true", help="Encode MP4 previews from recorded PNGs (requires --record or output.record_images)")
     parser.add_argument("--output-dir", help="Output root; each invocation creates a unique run directory")
     parser.add_argument("--oceansim-ext", help="Existing extension directory containing config/extension.toml")
     parser.add_argument("--backend", choices=["d3d12", "vulkan"])
@@ -39,6 +40,8 @@ def main(argv=None):
         cfg["output"]["directory"] = args.output_dir
     if args.record:
         cfg["output"]["record_images"] = True
+    if args.preview_mp4:
+        cfg["output"]["preview"]["enabled"] = True
     validate_config(cfg)
     if args.validate_only:
         print(f"Configuration valid: {resolve_path(args.config)}")

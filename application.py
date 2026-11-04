@@ -14,6 +14,7 @@ from config import resolve_path
 from environments.underwater import UnderwaterEnvironment, configure_rtx
 from experiments.change_detection import object_position, prepare_pass, trajectory_pose
 from recording import PoseRecorder, create_run_directory, write_json
+from preview import generate_previews
 from robots.bluerov import VEHICLE_PATH, build_bluerov, set_pose
 from scenes.tank import build_scene
 from sensors.stereo import CAMERA_PATHS, StereoCameras, build_stereo_rig, world_matrix
@@ -30,7 +31,8 @@ def run(app, cfg, args, extension, headless):
     timeline.pause()
     directory = create_run_directory(resolve_path(cfg["output"]["directory"]))
     write_json(directory / "config.json", cfg)
-    status = {"state": "initializing", "completed_frames": {}, "extension": extension}
+    status = {"state": "initializing", "completed_frames": {}, "extension": extension,
+              "preview": {"requested": cfg["output"]["preview"]["enabled"], "state": "pending" if cfg["output"]["preview"]["enabled"] else "disabled", "videos": {}}}
     write_json(directory / "status.json", status)
     print(f"[Output] {directory}")
     water = stereo = recorder = None
@@ -149,12 +151,26 @@ def run(app, cfg, args, extension, headless):
             recorder = None
             write_json(directory / "status.json", status)
             print(f"[Capture] {pass_name}: {index} stereo pairs processed.")
+        if cfg["output"]["preview"]["enabled"]:
+            status["state"] = "encoding_previews"
+            status["preview"]["state"] = "encoding"
+            write_json(directory / "status.json", status)
+
+            def preview_result(name, result):
+                status["preview"]["videos"][name] = result
+                write_json(directory / "status.json", status)
+
+            generate_previews(directory, passes, cfg["output"]["preview"], on_result=preview_result)
+            status["preview"]["state"] = "complete"
         status["state"] = "complete"
         write_json(directory / "status.json", status)
         print(f"[Done] {directory}")
     except BaseException as error:
         status["state"] = "interrupted" if isinstance(error, (KeyboardInterrupt, InterruptedError)) else "failed"
         status["error"] = f"{type(error).__name__}: {error}"
+        if status["preview"]["state"] == "encoding":
+            status["preview"]["state"] = "failed"
+            status["preview"]["error"] = status["error"]
         write_json(directory / "status.json", status)
         raise
     finally:
