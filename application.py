@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import random
+import time
+import subprocess
 import warnings
 
 import carb.settings
@@ -20,7 +22,19 @@ from scenes.tank import build_scene
 from sensors.stereo import CAMERA_PATHS, StereoCameras, build_stereo_rig, world_matrix
 
 
+def _gpu_name():
+    try:
+        result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                                capture_output=True, text=True, timeout=3, check=False)
+        return result.stdout.strip().splitlines() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def run(app, cfg, args, extension, headless):
+    benchmark_mode = getattr(args, "benchmark", False)
+    if benchmark_mode:
+        from benchmark import Benchmark
     seed = cfg["simulation"]["seed"]
     random.seed(seed)
     np.random.seed(seed)
@@ -35,7 +49,7 @@ def run(app, cfg, args, extension, headless):
               "preview": {"requested": cfg["output"]["preview"]["enabled"], "state": "pending" if cfg["output"]["preview"]["enabled"] else "disabled", "videos": {}}}
     write_json(directory / "status.json", status)
     print(f"[Output] {directory}")
-    water = stereo = recorder = None
+    water = stereo = recorder = benchmark = None
     try:
         context = omni.usd.get_context()
         # SimulationApp normally creates an empty stage. Reuse it rather than
@@ -69,6 +83,11 @@ def run(app, cfg, args, extension, headless):
         write_json(directory / "render_validation.json", render_report)
         stereo = StereoCameras(stage, cfg, directory, headless=headless)
         calibration = stereo.calibration()
+        if benchmark_mode:
+            benchmark = Benchmark(cfg, recording=cfg["output"]["record_images"],
+                                  warmup=cfg["simulation"]["warmup_frames"], gpu=_gpu_name(),
+                                  versions={"isaac_sim": getattr(app, "_app_version", None),
+                                            "oceansim": extension["extension_id"]})
         write_json(directory / "stereo_calibration.json", calibration)
         print("[Phase 3] OceanSim stereo initialized; intrinsics, baseline and relative axes verified.")
         print("[Phase 4] Refractive WaterSurface and RTX settings applied; visible caustics require inspection.")
@@ -112,9 +131,16 @@ def run(app, cfg, args, extension, headless):
             scene_path = directory / f"tank_{pass_name}_rtx.usda"
             if not stage.GetRootLayer().Export(str(scene_path)):
                 raise RuntimeError(f"Could not export {scene_path}")
-            for _ in range(cfg["simulation"]["warmup_frames"]):
+            for warmup_index in range(cfg["simulation"]["warmup_frames"]):
+                if benchmark_mode:
+                    warmup_time_s = warmup_index / cfg["simulation"]["fps"]
+                    timeline.set_current_time(warmup_time_s)
+                    water.update(warmup_time_s)
                 render_step()
-            recorder = PoseRecorder(directory / pass_name, images=cfg["output"]["record_images"])
+                if benchmark_mode:
+                    stereo.render_pair()
+            if not benchmark_mode or cfg["output"]["record_images"]:
+                recorder = PoseRecorder(directory / pass_name, images=cfg["output"]["record_images"])
             index = 0
             status["state"] = f"running_{pass_name}"
             write_json(directory / "status.json", status)
@@ -123,19 +149,29 @@ def run(app, cfg, args, extension, headless):
                     if frames == 0:
                         break
                     raise InterruptedError("Application closed during a bounded capture")
+                start_ns = time.perf_counter_ns() if benchmark_mode else None
                 time_s = index / cfg["simulation"]["fps"]
                 timeline.set_current_time(time_s)
                 if experiment:
                     set_pose(stage, *trajectory_pose(cfg["experiment"]["trajectory"], index))
                 water.update(time_s)
+                scene_end_ns = time.perf_counter_ns() if benchmark_mode else None
+                timings = {"annotator_acquisition_ms": 0.0, "processing_readback_combined_ms": 0.0} if benchmark_mode else None
+                render_ns = 0
                 pair = None
-                for _ in range(cfg["simulation"]["readiness_attempts"]):
+                retries = 0
+                for attempt in range(cfg["simulation"]["readiness_attempts"]):
+                    render_start_ns = time.perf_counter_ns() if benchmark_mode else None
                     render_step()
-                    pair = stereo.render_pair()
+                    if benchmark_mode:
+                        render_ns += time.perf_counter_ns() - render_start_ns
+                    pair = stereo.render_pair(timings) if benchmark_mode else stereo.render_pair()
                     if pair is not None:
                         break
+                    retries += 1
                 if pair is None:
                     raise RuntimeError("Stereo RGB/depth annotators did not become ready. Check Kit's RTX/CUDA/Replicator errors and the active graphics API.")
+                acquisition_end_ns = time.perf_counter_ns() if benchmark_mode else None
                 body = world_matrix(stage, VEHICLE_PATH)
                 poses = {"T_world_body": body.tolist(), "T_world_optical": {
                     side: world_matrix(stage, path, optical=True).tolist() for side, path in CAMERA_PATHS.items()
@@ -144,13 +180,30 @@ def run(app, cfg, args, extension, headless):
                 for side, matrix in poses["T_world_optical"].items():
                     if not np.allclose(np.linalg.inv(body) @ matrix, initial_extrinsics[side], atol=1e-5):
                         raise RuntimeError(f"{side} camera no longer follows the vehicle with fixed calibration")
-                recorder.record(index, time_s, pair, poses)
+                if recorder is not None:
+                    recorder.record(index, time_s, pair, poses)
+                iteration_end_ns = time.perf_counter_ns() if benchmark_mode else None
+                if benchmark_mode:
+                    row = {"frame": index, "pass": pass_name, "simulation_time_s": time_s,
+                           "scene_update_ms": (scene_end_ns - start_ns) / 1e6,
+                           "render_ms": render_ns / 1e6, **timings,
+                           "underwater_processing_ms": None, "gpu_readback_ms": None,
+                           "recording_ms": (iteration_end_ns - acquisition_end_ns) / 1e6 if recorder else 0.0,
+                           "acquisition_total_ms": (acquisition_end_ns - start_ns) / 1e6,
+                           "iteration_total_ms": (iteration_end_ns - start_ns) / 1e6,
+                           "readiness_retries": retries}
+                    benchmark.add(row, start_ns=start_ns, acquisition_end_ns=acquisition_end_ns,
+                                  iteration_end_ns=iteration_end_ns)
                 index += 1
                 status["completed_frames"][pass_name] = index
-            recorder.close()
+                if benchmark_mode and (index % 100 == 0 or index == frames):
+                    print(benchmark.progress(frames * len(passes)), flush=True)
+            if recorder is not None:
+                recorder.close()
             recorder = None
             write_json(directory / "status.json", status)
             print(f"[Capture] {pass_name}: {index} stereo pairs processed.")
+        encoding_start_ns = time.perf_counter_ns() if benchmark_mode and cfg["output"]["preview"]["enabled"] else None
         if cfg["output"]["preview"]["enabled"]:
             status["state"] = "encoding_previews"
             status["preview"]["state"] = "encoding"
@@ -162,6 +215,11 @@ def run(app, cfg, args, extension, headless):
 
             generate_previews(directory, passes, cfg["output"]["preview"], on_result=preview_result)
             status["preview"]["state"] = "complete"
+        if benchmark_mode:
+            report = benchmark.write(directory, calibration=calibration, render_validation=render_report,
+                                     mp4_encoding_s=(time.perf_counter_ns() - encoding_start_ns) / 1e9 if encoding_start_ns else None)
+            print(f"[Benchmark] {report['summary']['effective_pairs_per_s']:.2f} processed pairs/s; "
+                  f"{report['summary']['missed_deadlines']} acquisition deadlines missed", flush=True)
         status["state"] = "complete"
         write_json(directory / "status.json", status)
         print(f"[Done] {directory}")

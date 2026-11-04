@@ -16,6 +16,7 @@ def parse_args(argv=None):
     parser.add_argument("--experiment", choices=["change_detection"])
     parser.add_argument("--frames", type=int, help="Frames per pass; 0 keeps interactive preview open")
     parser.add_argument("--record", action="store_true", help="Record paired underwater PNGs and ground truth")
+    parser.add_argument("--benchmark", action="store_true", help="Measure processed stereo throughput after warmup")
     parser.add_argument("--preview-mp4", action="store_true", help="Encode MP4 previews from recorded PNGs (requires --record or output.record_images)")
     parser.add_argument("--output-dir", help="Output root; each invocation creates a unique run directory")
     parser.add_argument("--oceansim-ext", help="Existing extension directory containing config/extension.toml")
@@ -26,7 +27,7 @@ def parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.frames is not None and args.frames < 0:
         parser.error("--frames must be nonnegative")
-    if args.frames == 0 and (args.experiment or args.headless or args.mode == "headless"):
+    if args.frames == 0 and (args.experiment or args.headless or args.mode == "headless" or args.benchmark):
         parser.error("--frames 0 is only valid for interactive preview without an experiment")
     return args
 
@@ -38,6 +39,8 @@ def main(argv=None):
         cfg["runtime"]["backend"] = args.backend
     if args.output_dir:
         cfg["output"]["directory"] = args.output_dir
+    if args.benchmark:
+        cfg["output"]["preview"]["enabled"] = False
     if args.record:
         cfg["output"]["record_images"] = True
     if args.preview_mp4:

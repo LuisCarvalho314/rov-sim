@@ -213,3 +213,31 @@ CPU checks using ordinary Python with NumPy, or the configured bundled Python:
 | Background images differ | Match config, trajectory, seed, phase and warmup; evaluate residual photon/denoiser history separately. |
 
 Sources: [OceanSim UW_Camera](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/sensors/UW_Camera.py), [WaterSurface](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/watersurface/WaterSurface.py), [Isaac Sim 5.0 SimulationApp](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/py/source/extensions/isaacsim.simulation_app/docs/index.html). Installed sources take precedence over newer upstream APIs.
+# Benchmarking processed stereo throughput
+
+Run a bounded benchmark with the normal RTX, OceanSim and stereo path:
+
+```powershell
+.\launch.ps1 -RunArguments @('--scene', 'tank', '--headless', '--benchmark', '--frames', '300')
+```
+
+The standard tank config does not record PNGs. Benchmark mode skips pose and image recording in that case and disables MP4 previews. Use `--record` to include PNG compression, disk writes and poses. Use `--record --preview-mp4` to time post-capture FFmpeg encoding. A custom config with `output.record_images=true` also records in benchmark mode. `--config` accepts alternative JSON-style YAML files.
+
+The run directory contains `benchmark.json` and `benchmark_frames.csv`, alongside the resolved config, render validation and status files. Progress prints every 100 pairs. Effective pairs/s is measured wall-clock throughput across completed CPU stereo pairs, including retries and gaps between measured iterations. The 50 ms deadline uses individual acquisition latency. Simulation-time 30 FPS and GUI viewport FPS are separate measures.
+
+Generate comparable profiles and run each under the same machine and driver conditions:
+
+```powershell
+python benchmark_profiles.py
+.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/A.yaml')
+.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/B.yaml')
+.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/C.yaml')
+.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/D.yaml')
+python compare_benchmarks.py outputs/<A-run-id> outputs/<B-run-id> outputs/<C-run-id> outputs/<D-run-id>
+```
+
+The A–D configs change only RTX caustics, RTX subframes and recording (A: on/4/off; B: on/1/off; C: off/1/off; D: on/1/on). The report stores the full resolved config for checking other settings.
+
+`render_ms` is the blocking `rep.orchestrator.step(wait_for_render=True)` wall time. `annotator_acquisition_ms` covers the external RGB/depth readiness calls. OceanSim's `UW_Camera.render()` fetches those annotators again, launches RGB and degraded-depth Warp kernels, then calls `.numpy()` on both results. Those internal fetches, GPU processing and CPU readback are measured together as `processing_readback_combined_ms`; `underwater_processing_ms` and `gpu_readback_ms` are explicitly unavailable. This avoids attributing asynchronous CUDA work to a Python call without a GPU synchronization boundary. `recording_ms` includes pose validation and, when enabled, PNG and pose writes. FFmpeg is timed separately after capture. Stage timing sums need not equal total acquisition because Python and pose bookkeeping also consume time.
+
+Once the slowest stage is known, run that same benchmark under NVIDIA Nsight Systems with CUDA and CPU tracing, or use Isaac Sim's Tracy support if installed. Compare the instrumented run with an ordinary benchmark because GPU tracing can add overhead. For a kernel/readback split, add CUDA events or Warp profiling inside OceanSim's camera implementation in an isolated diagnostic copy; do not infer it from the existing wall-clock fields.

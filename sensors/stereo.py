@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import warnings
 
 import numpy as np
@@ -105,21 +106,31 @@ class StereoCameras:
             "formation": "OceanSim depth-based attenuation/backscatter; no refractive stereo calibration or housing distortion model",
         }
 
-    def render_pair(self):
+    def render_pair(self, timings=None):
         # OceanSim 1.0.0 exposes its processed image as _uw_frame. Keep all
         # version-specific access here. Check both annotators before invoking
         # its GPU kernel; an RGB frame alone does not guarantee depth readiness.
+        start = time.perf_counter_ns() if timings is not None else None
         width, height = self.cfg["stereo"]["resolution"]
         for cam in self.cameras.values():
             if cam._rgba_annot.get_data().size == 0 or cam._depth_annot.get_data().size == 0:
+                if timings is not None:
+                    timings["annotator_acquisition_ms"] += (time.perf_counter_ns() - start) / 1e6
                 return None
+        if timings is not None:
+            timings["annotator_acquisition_ms"] += (time.perf_counter_ns() - start) / 1e6
+            start = time.perf_counter_ns()
         frames = {}
         for side, cam in self.cameras.items():
             cam.render()
             frame = cam._uw_frame
             if frame is None or frame.shape[:2] != (height, width):
+                if timings is not None:
+                    timings["processing_readback_combined_ms"] += (time.perf_counter_ns() - start) / 1e6
                 return None
             frames[side] = frame.copy()
+        if timings is not None:
+            timings["processing_readback_combined_ms"] += (time.perf_counter_ns() - start) / 1e6
         return frames
 
     def close(self):
