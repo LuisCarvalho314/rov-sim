@@ -11,7 +11,7 @@ from recording import write_json
 TARGET_FPS = 20.0
 BUDGET_MS = 1000.0 / TARGET_FPS
 STAGES = ("scene_update_ms", "render_ms", "annotator_acquisition_ms",
-          "underwater_processing_ms", "gpu_readback_ms",
+          "underwater_processing_ms", "gpu_readback_ms", "gpu_synchronization_ms",
           "processing_readback_combined_ms", "recording_ms")
 COLUMNS = ("frame", "pass", "simulation_time_s", *STAGES,
            "acquisition_total_ms", "iteration_total_ms", "readiness_retries")
@@ -34,12 +34,14 @@ def distribution(values):
 
 
 class Benchmark:
-    def __init__(self, cfg, *, recording, warmup, gpu=None, versions=None):
+    def __init__(self, cfg, *, recording, warmup, gpu=None, versions=None, mode="full", tracy=False):
         self.cfg = cfg
         self.recording = recording
         self.warmup = warmup
         self.gpu = gpu
         self.versions = versions or {}
+        self.mode = mode
+        self.tracy = tracy
         self.rows = []
         self.first_start_ns = None
         self.last_acquisition_end_ns = None
@@ -96,17 +98,28 @@ class Benchmark:
     def progress(self, expected):
         result = self.summary()
         frame = result["frame_time"]
-        return (f"[Benchmark] {len(self.rows)}/{expected} pairs | "
-                f"{result['effective_pairs_per_s']:.1f} pairs/s | mean {frame['mean_ms']:.1f} ms | "
+        unit = "pairs" if self.mode == "full" else "steps" if self.mode == "render-only" else "jobs"
+        return (f"[Benchmark] {len(self.rows)}/{expected} {unit} | "
+                f"{result['effective_pairs_per_s']:.1f} {unit}/s | mean {frame['mean_ms']:.1f} ms | "
                 f"p95 {frame['p95_ms']:.1f} ms")
 
-    def write(self, directory, *, calibration, render_validation, mp4_encoding_s=None):
+    def write(self, directory, *, calibration, render_validation, mp4_encoding_s=None, drain_ms=0.0,
+              warp_gpu_timing=None):
         directory = Path(directory)
         with (directory / "benchmark_frames.csv").open("w", newline="", encoding="utf-8") as file:
             writer = csv.DictWriter(file, fieldnames=COLUMNS)
             writer.writeheader()
             writer.writerows(self.rows)
-        report = {"summary": self.summary(), "configuration": self.cfg,
+        summary = self.summary()
+        summary["throughput_unit"] = "processed_stereo_pairs" if self.mode == "full" else "stereo_render_steps" if self.mode == "render-only" else "ocean_gpu_jobs"
+        summary["gpu_drain_ms"] = drain_ms if self.mode == "no-readback" else None
+        summary["drain_inclusive_jobs_per_s"] = (len(self.rows) / (summary["acquisition_wall_clock_s"] + drain_ms / 1000)
+                                                   if self.mode == "no-readback" else None)
+        report = {"summary": summary, "configuration": self.cfg,
+                  "camera_backend": self.cfg["stereo"].get("backend", "legacy"),
+                  "measurement_mode": self.mode, "tracy_enabled": self.tracy,
+                  "warp_gpu_timing": warp_gpu_timing,
+                  "active_renderer": render_validation.get("renderer_readback"),
                   "actual_resolution_wh": calibration["resolution_wh"],
                   "actual_baseline_m": calibration["baseline_m"],
                   "renderer": render_validation, "rt_subframes": self.cfg["simulation"]["rt_subframes"],
@@ -115,8 +128,12 @@ class Benchmark:
                   "versions": {"python": platform.python_version(), **self.versions},
                   "mp4_encoding_s": mp4_encoding_s,
                   "measurement_notes": [
-                      "Throughput uses wall-clock time from the first measured scene update to the last acquired CPU pair; startup and warmup are excluded.",
-                      "OceanSim UW_Camera.render() re-fetches annotators, launches RGB and depth Warp kernels, then calls .numpy() on both outputs. Separate underwater_processing_ms and gpu_readback_ms are unavailable; processing_readback_combined_ms measures all of these calls and their synchronization.",
+                      "camera_backend identifies acquisition. Experimental backends split acquisition, kernel submission and requested RGB readback; degraded depth readback is opt-in. Legacy normal capture retains UW_Camera.render(), including its mandatory RGB and degraded-depth readbacks.",
+                      "Experimental no-readback runs fence their Warp stream before the next render can reuse borrowed annotator buffers. gpu_synchronization_ms records this wait separately from rendering; no-readback throughput also includes the final GPU drain.",
+                      "Throughput uses wall-clock time from the first measured scene update to the last measured step/job/pair; startup and warmup are excluded.",
+                      "Normal full capture uses OceanSim UW_Camera.render(). Diagnostic full/no-readback modes mirror OceanSim 1.0.0 kernel calls with separate CPU wall timings; underwater_processing_ms is host enqueue time, while gpu_readback_ms includes .numpy() transfer plus any GPU synchronization wait. Neither is pure GPU execution time.",
+                      "Render-only and no-readback throughput counts submitted steps/jobs, not acquired CPU stereo pairs. No-readback reports a final GPU drain separately; validation images are acquired outside measured frames.",
+                      "Optional Warp CUDA activity timing inserts events and a final synchronization; it adds overhead and excludes RTX/DX12 GPU work. It is never enabled in normal runs.",
                       "annotator_acquisition_ms measures the external RGB/depth readiness checks. OceanSim's internal annotator fetches are included in processing_readback_combined_ms.",
                       "render_ms measures blocking rep.orchestrator.step() wall time, including its wait_for_render behavior and retries; it is not a pure GPU kernel time.",
                       "Frame latency and end-to-end throughput differ; simulation timestamps and GUI FPS are not execution throughput.",

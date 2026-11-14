@@ -1,4 +1,4 @@
-"""Generate comparable A-D benchmark configurations from a base config."""
+"""Generate comparable RTX 2.0 and Legacy benchmark configurations."""
 from __future__ import annotations
 
 import argparse
@@ -6,11 +6,12 @@ import copy
 import json
 from pathlib import Path
 
-from config import load_config
+from config import load_config, validate_config
 
 
-PROFILES = {"A": (True, 4, False), "B": (True, 1, False),
-            "C": (False, 1, False), "D": (True, 1, True)}
+PROFILES = {"A": ("RealTimePathTracing", False),
+            "B": ("RaytracedLighting", False),
+            "C": ("RaytracedLighting", True)}
 
 
 def main(argv=None):
@@ -20,12 +21,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     base = load_config(args.base)
     args.directory.mkdir(parents=True, exist_ok=True)
-    for name, (caustics, subframes, recording) in PROFILES.items():
+    for name, (renderer, caustics) in PROFILES.items():
         cfg = copy.deepcopy(base)
+        cfg["runtime"]["renderer"] = renderer
         cfg["rtx"]["caustics"] = caustics
-        cfg["simulation"]["rt_subframes"] = subframes
-        cfg["output"]["record_images"] = recording
+        cfg["simulation"]["rt_subframes"] = 1
+        cfg["output"]["record_images"] = False
         cfg["output"]["preview"]["enabled"] = False
+        validate_config(cfg)
         path = args.directory / f"{name}.yaml"
         path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
         print(path)

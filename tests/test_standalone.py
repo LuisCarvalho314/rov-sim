@@ -53,9 +53,24 @@ class ConfigurationTests(unittest.TestCase):
                     validate_config(cfg)
 
     def test_unknown_and_unsupported_caustics_backend_combination(self):
+        self.cfg["rtx"]["caustics"] = True
         self.cfg["runtime"]["renderer"] = "PathTracing"
         with self.assertRaisesRegex(ValueError, "Photon caustics"):
             validate_config(self.cfg)
+        self.cfg["runtime"]["renderer"] = "RealTimePathTracing"
+        with self.assertRaisesRegex(ValueError, "Photon caustics"):
+            validate_config(self.cfg)
+
+    def test_renderer_profiles_and_legacy_geometry_match(self):
+        modern = load_config()
+        legacy = load_config("configs/tank_legacy.yaml")
+        self.assertEqual(modern["runtime"]["renderer"], "RealTimePathTracing")
+        self.assertFalse(modern["rtx"]["caustics"])
+        self.assertEqual(legacy["runtime"]["renderer"], "RaytracedLighting")
+        self.assertTrue(legacy["rtx"]["caustics"])
+        self.assertEqual(modern["simulation"]["rt_subframes"], 1)
+        for section in ("stereo", "tank", "water", "underwater", "robot", "experiment"):
+            self.assertEqual(modern[section], legacy[section])
 
     def test_repeated_trajectory_frames_are_rejected(self):
         self.cfg["experiment"]["trajectory"][1]["frame"] = 0
@@ -78,9 +93,23 @@ class ConfigurationTests(unittest.TestCase):
             ext = Path(folder) / "extsUser/OceanSim"
             (ext / "config").mkdir(parents=True)
             (ext / "config/extension.toml").write_text('[package]\nversion="1.0.0"\n')
-            with patch.dict(os.environ, {"ISAAC_PATH": folder, "OCEANSIM_EXT_PATH": ""}):
+            with patch.dict(os.environ, {"ISAAC_PATH": folder, "OCEANSIM_EXT_PATH": str(ext)}):
                 self.assertEqual(find_oceansim_extension(self.cfg), ext)
             self.assertEqual(find_oceansim_extension(self.cfg, str(ext)), ext)
+
+    def test_pinned_extension_precedes_installation_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pinned = root / 'third_party/OceanSim'
+            installed = root / 'extsUser/OceanSim'
+            for ext in (pinned, installed):
+                (ext / 'config').mkdir(parents=True)
+                (ext / 'config/extension.toml').write_text('[package]\nversion="1.0.0"\n')
+            with patch('config.ROOT', root), patch.dict(os.environ, {'ISAAC_PATH': folder, 'OCEANSIM_EXT_PATH': ''}):
+                self.assertEqual(find_oceansim_extension(self.cfg), pinned)
+                self.assertEqual(find_oceansim_extension(self.cfg, str(installed)), installed)
+                (pinned / 'config/extension.toml').unlink()
+                self.assertEqual(find_oceansim_extension(self.cfg), installed)
 
 
 class StartupTests(unittest.TestCase):
@@ -97,8 +126,39 @@ class StartupTests(unittest.TestCase):
             options = startup.launch_options(cfg, True)
         self.assertIn("--/app/vulkan=false", options["extra_args"])
         self.assertTrue(options["headless"])
-        self.assertFalse(options["fast_shutdown"])
-        self.assertEqual(options["renderer"], "RaytracedLighting")
+        self.assertTrue(options["fast_shutdown"])
+        self.assertEqual(options["renderer"], "RealTimePathTracing")
+        self.assertEqual(options["anti_aliasing"], 0)
+        self.assertIn("--/persistent/rtx/modes/rt2/enabled=true", options["extra_args"])
+        self.assertIn("--/persistent/rtx/modes/rt/enabled=true", options["extra_args"])
+        self.assertIn("--/persistent/rtx/rendermode=RealTimePathTracing", options["extra_args"])
+        self.assertIn("--/rtx/rendermode=RealTimePathTracing", options["extra_args"])
+        with patch.object(startup.os, "name", "nt"):
+            legacy = startup.launch_options(load_config("configs/tank_legacy.yaml"), True)
+        self.assertIn("--/persistent/rtx/modes/rt/enabled=true", legacy["extra_args"])
+        self.assertFalse(legacy["fast_shutdown"])
+        with patch.object(startup.os, "name", "nt"):
+            profiled = startup.launch_options(cfg, True, tracy=True)
+        self.assertEqual(profiled["profiler_backend"], ["tracy"])
+        self.assertIn("omni.kit.profiler.tracy", profiled["extra_args"])
+        with self.assertRaisesRegex(ValueError, "may not override"):
+            startup.launch_options(cfg, True, ("--/rtx/rendermode=RaytracedLighting",))
+
+    def test_benchmark_supervisor_records_native_startup_failure(self):
+        cfg = load_config()
+        with tempfile.TemporaryDirectory() as folder:
+            cfg["output"]["directory"] = folder
+            child = types.SimpleNamespace(stdout=["native renderer crash\n"], wait=lambda: 3221225477)
+            with patch.object(run.subprocess, "Popen", return_value=child) as spawned:
+                self.assertEqual(run.supervise_benchmark(cfg, ["--benchmark", "--frames", "300"]), 1)
+            directory = next(Path(folder).iterdir())
+            status = json.loads((directory / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(status["process_exit_code"], 3221225477)
+            self.assertEqual((directory / "kit_console.log").read_text(encoding="utf-8"), "native renderer crash\n")
+            self.assertEqual(json.loads((directory / "config.json").read_text(encoding="utf-8")), cfg)
+            self.assertIn("--_benchmark-child", spawned.call_args.args[0])
+            self.assertIn(str(directory), spawned.call_args.args[0])
 
     def test_app_closes_if_extension_startup_fails_and_restores_argv(self):
         events = []
@@ -128,6 +188,51 @@ class StartupTests(unittest.TestCase):
         for args in (["--headless", "--frames", "0"], ["--experiment", "change_detection", "--frames", "0"]):
             with patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
                 run.parse_args(args)
+
+
+class RendererValidationTests(unittest.TestCase):
+    def test_photometric_profiles_preserve_experiment_and_validate_controls(self):
+        original = load_config("configs/tank_photometric_baseline.yaml")
+        candidate = copy.deepcopy(original)
+        candidate["rtx"]["antialiasing"] = 4
+        candidate["rtx"]["settings"]["/rtx/post/tonemap/filmIso"] = 800.0
+        validate_config(candidate)
+        for section in ("tank", "robot", "stereo", "changes", "experiment", "underwater"):
+            self.assertEqual(candidate[section], original[section])
+        for bad in (-1, 1, 2, 5, True):
+            candidate["rtx"]["antialiasing"] = bad
+            with self.assertRaisesRegex(ValueError, "antialiasing"):
+                validate_config(candidate)
+
+    def test_readback_reports_mode_and_does_not_switch_renderer(self):
+        cfg = load_config()
+        values = {"/app/vulkan": False, "/rtx/rendermode": "RealTimePathTracing",
+                  "/persistent/rtx/modes/rt2/enabled": True, "/rtx/post/aa/op": 0}
+
+        class Settings:
+            def get(self, key):
+                return values.get(key)
+
+            def set(self, key, value):
+                values[key] = value
+
+        carb = types.ModuleType("carb")
+        carb.settings = types.SimpleNamespace(get_settings=lambda: Settings())
+        pxr = types.ModuleType("pxr")
+        pxr.UsdShade = object()
+        with patch.dict(sys.modules, {"carb": carb, "carb.settings": carb.settings, "pxr": pxr}):
+            spec = importlib.util.spec_from_file_location("_underwater_validation_check", ROOT / "environments/underwater.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            report = module.configure_rtx(cfg)
+            self.assertEqual(report["renderer_readback"], "RealTimePathTracing")
+            self.assertTrue(report["rt2_enabled_readback"])
+            self.assertFalse(report["processed_stereo_frame"])
+            self.assertEqual(report["dlss_aa_readback"], 0)
+            self.assertFalse(report["graphics_backend_runtime_confirmed"])
+            values["/persistent/rtx/modes/rt2/enabled"] = False
+            with self.assertRaisesRegex(RuntimeError, "not enabled"):
+                module.configure_rtx(cfg)
 
 
 class ExperimentTests(unittest.TestCase):

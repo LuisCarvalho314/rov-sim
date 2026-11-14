@@ -4,38 +4,59 @@ from __future__ import annotations
 import os
 
 
-def launch_options(cfg, headless, kit_args=()):
+def launch_options(cfg, headless, kit_args=(), *, tracy=False):
     backend = cfg["runtime"]["backend"]
     if backend == "d3d12" and os.name != "nt":
         raise RuntimeError("DirectX 12 requires Windows. Launch through PowerShell and Isaac Sim's python.bat.")
     extra = list(cfg["runtime"]["extra_args"]) + list(kit_args)
+    if any(any(path in arg for path in ("/rtx/rendermode", "/persistent/rtx/rendermode", "/rtx/post/aa/op", "/persistent/rtx/modes/", "/app/vulkan")) for arg in kit_args):
+        raise ValueError("--kit-arg may not override renderer, DLSS, RTX mode availability or backend")
     # These must reach Kit before its graphics device is created. Isaac Sim's
     # Python experience otherwise explicitly enables Vulkan on Windows.
     extra.append(f"--/app/vulkan={'false' if backend == 'd3d12' else 'true'}")
+    mode = "rt2" if cfg["runtime"]["renderer"] == "RealTimePathTracing" else "rt" if cfg["runtime"]["renderer"] == "RaytracedLighting" else "pt"
+    extra.append(f"--/persistent/rtx/modes/{mode}/enabled=true")
+    if mode == "rt2":
+        # Isaac Sim 5.0 / Kit 107 needs both real-time modes registered and
+        # the persistent + active selection before viewport creation.
+        extra.extend(("--/persistent/rtx/modes/rt/enabled=true",
+                      "--/persistent/rtx/rendermode=RealTimePathTracing",
+                      "--/rtx/rendermode=RealTimePathTracing"))
     extra.append("--/app/player/useFixedTimeStepping=true")
+    if tracy:
+        extra.extend(("--enable", "omni.kit.profiler.tracy"))
     return {
         "headless": headless,
         "renderer": cfg["runtime"]["renderer"],
+        "anti_aliasing": cfg["rtx"].get("antialiasing", 0),
+        "profiler_backend": ["tracy"] if tracy else [],
         "width": cfg["stereo"]["resolution"][0],
         "height": cfg["stereo"]["resolution"][1],
         "multi_gpu": False,
         "sync_loads": True,
-        "fast_shutdown": False,
+        "fast_shutdown": mode == "rt2",
         "extra_args": extra,
     }
 
 
 def enable_oceansim(app, directory):
+    from pathlib import Path
     import omni.kit.app
+    import omni.ext
 
     manager = omni.kit.app.get_app().get_extension_manager()
-    manager.add_path(str(directory.parent))
+    # A direct path takes priority over collection copies with the same ID.
+    # This selects the pinned checkout without changing installation folders.
+    manager.add_path(str(directory), omni.ext.ExtensionPathType.DIRECT_PATH)
     app.update()
-    matches = [item for item in manager.get_extensions() if item["name"].lower() == directory.name.lower()]
+    registered_copies = [item for item in manager.get_extensions() if item["name"].lower() == directory.name.lower()]
+    matches = [item for item in registered_copies
+               if Path(manager.get_extension_path(item["id"])).resolve() == directory.resolve()]
+    if any(item["enabled"] for item in registered_copies if item not in matches):
+        raise RuntimeError("Another OceanSim copy is already enabled; launch a fresh process with the requested checkout.")
     if len(matches) != 1:
         raise RuntimeError(f"Expected one registered {directory.name} extension, found {matches}. Remove duplicate extension search paths.")
     extension_id = matches[0]["id"]
-    from pathlib import Path
     registered = Path(manager.get_extension_path(extension_id)).resolve()
     if registered != directory.resolve():
         raise RuntimeError(f"OceanSim resolved to {registered}, requested {directory}. Remove duplicate registrations.")

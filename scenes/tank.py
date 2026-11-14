@@ -34,6 +34,19 @@ def build_lighting(stage, cfg):
         light.GetPrim().CreateAttribute("light:enableCaustics", Sdf.ValueTypeNames.Bool).Set(cfg["rtx"]["caustics"])
 
 
+def build_inspection_lighting(stage, cfg):
+    """Optional vehicle-mounted area lamps; local -Z points along the beam."""
+    for i, spec in enumerate(cfg["lighting"].get("inspection_lights", [])):
+        light = UsdLux.RectLight.Define(stage, f"/World/BlueROV/InspectionLight_{i}")
+        light.CreateWidthAttr(spec["size_m"][0])
+        light.CreateHeightAttr(spec["size_m"][1])
+        light.CreateIntensityAttr(spec["intensity"])
+        light.CreateColorAttr(Gf.Vec3f(*cfg["lighting"]["colour"]))
+        api = UsdGeom.XformCommonAPI(light)
+        api.SetTranslate(Gf.Vec3d(*spec["position_m"]))
+        api.SetRotate(Gf.Vec3f(*spec["rotation_xyz_deg"]))
+
+
 def build_scene(stage, cfg):
     if stage.GetPrimAtPath("/World/Tank"):
         raise RuntimeError("Tank already exists; build the stage only once")

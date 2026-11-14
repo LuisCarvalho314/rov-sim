@@ -55,6 +55,8 @@ def validate_config(c):
 
     try:
         tank, water, robot, stereo = (c[k] for k in ("tank", "water", "robot", "stereo"))
+        if stereo.get("backend", "legacy") not in ("legacy", "camera-sensor", "tiled"):
+            raise ValueError("stereo.backend must be legacy, camera-sensor or tiled")
         for section, key in ((c["rtx"], "caustics"), (stereo, "preview"),
                              (water, "cast_shadows"), (water["wave"], "animated"),
                              (c["output"], "record_images")):
@@ -79,6 +81,17 @@ def validate_config(c):
             raise ValueError("runtime.extra_args must be a list of strings")
         if not isinstance(c["rtx"]["settings"], dict):
             raise ValueError("rtx.settings must map registered RTX paths to values")
+        if c["rtx"].get("antialiasing", 0) not in (0, 3, 4) or isinstance(c["rtx"].get("antialiasing", 0), bool):
+            raise ValueError("rtx.antialiasing must be 0 (off), 3 (DLSS), or 4 (DLAA)")
+        renderer = c["runtime"]["renderer"]
+        if renderer not in ("RealTimePathTracing", "RaytracedLighting", "PathTracing"):
+            raise ValueError(f"Unsupported runtime.renderer: {renderer}")
+        reserved = ("/rtx/rendermode", "/rtx/post/aa/op", "/rtx/caustics/enabled")
+        if any(key in c["rtx"]["settings"] for key in reserved):
+            raise ValueError("Renderer, DLSS and caustics are controlled by dedicated configuration fields")
+        for arg in (*c["runtime"]["extra_args"],):
+            if any(path in arg for path in ("/rtx/rendermode", "/persistent/rtx/rendermode", "/rtx/post/aa/op", "/persistent/rtx/modes/", "/app/vulkan")):
+                raise ValueError(f"Conflicting Kit renderer/backend argument: {arg}")
         vector(tank["dimensions_m"], "tank.dimensions_m", positive=True)
         vector(tank["colour"], "tank.colour")
         number(tank["wall_thickness_m"], "tank.wall_thickness_m")
@@ -127,7 +140,7 @@ def validate_config(c):
             integer(c["rtx"][key], f"rtx.{key}", 0 if key == "filter_steps" else 1)
             if c["rtx"][key] > maximum:
                 raise ValueError(f"rtx.{key} exceeds OceanSim's supported range")
-        if c["rtx"]["caustics"] and c["runtime"]["renderer"] != "RaytracedLighting":
+        if c["rtx"]["caustics"] and renderer != "RaytracedLighting":
             raise ValueError("Photon caustics require the configured legacy RaytracedLighting renderer")
         if c["runtime"]["backend"] not in ("d3d12", "vulkan"):
             raise ValueError("runtime.backend must be d3d12 or vulkan")
@@ -142,6 +155,20 @@ def validate_config(c):
         vector(lighting["colour"], "lighting.colour")
         number(lighting["intensity"], "lighting.intensity")
         number(lighting["height_above_tank_m"], "lighting.height_above_tank_m")
+        for light in lighting.get("inspection_lights", []):
+            vector(light["position_m"], "inspection_light.position_m")
+            vector(light["rotation_xyz_deg"], "inspection_light.rotation_xyz_deg")
+            vector(light["size_m"], "inspection_light.size_m", 2, True)
+            number(light["intensity"], "inspection_light.intensity")
+        for key, value in water.get("material", {}).items():
+            if key in ("ior", "depth"):
+                number(value, f"water.material.{key}")
+            elif key == "transmission_color":
+                vector(value, "water.material.transmission_color", positive=True)
+                if max(value) > 1:
+                    raise ValueError("water transmission colour must be <= 1")
+            else:
+                raise ValueError(f"Unsupported water material control: {key}")
         if not lighting["positions_xy_m"]:
             raise ValueError("Configure at least one overhead light")
         for position in lighting["positions_xy_m"]:
@@ -169,10 +196,11 @@ def find_oceansim_extension(cfg, override=None):
         candidates = [resolve_path(value)]
     else:
         install = os.environ.get("ISAAC_PATH") or os.environ.get("ISAAC_SIM_PATH")
-        candidates = []
+        # Prefer the revision pinned by this repository over an installed copy.
+        candidates = [ROOT / "third_party/OceanSim"]
         if install:
             base = resolve_path(install)
-            candidates = [base / "extsUser/OceanSim", base / "_build/windows-x86_64/release/extsUser/OceanSim"]
+            candidates.extend([base / "extsUser/OceanSim", base / "_build/windows-x86_64/release/extsUser/OceanSim"])
     for candidate in candidates:
         if (candidate / "config/extension.toml").is_file():
             return candidate

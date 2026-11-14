@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 import warnings
+from contextlib import contextmanager
 
 import numpy as np
 from pxr import Gf, Usd, UsdGeom
@@ -12,6 +13,18 @@ from robots.bluerov import VEHICLE_PATH
 
 RIG_PATH = VEHICLE_PATH + "/StereoRig"
 CAMERA_PATHS = {side: RIG_PATH + "/" + side.title() for side in ("left", "right")}
+
+
+@contextmanager
+def tracy_zone(name, enabled):
+    if enabled:
+        import carb.profiler
+        carb.profiler.begin(1, name)
+    try:
+        yield
+    finally:
+        if enabled:
+            carb.profiler.end(1)
 
 
 def build_stereo_rig(stage, cfg):
@@ -106,32 +119,81 @@ class StereoCameras:
             "formation": "OceanSim depth-based attenuation/backscatter; no refractive stereo calibration or housing distortion model",
         }
 
-    def render_pair(self, timings=None):
+    def render_pair(self, timings=None, *, diagnostic_mode=None, tracy=False):
         # OceanSim 1.0.0 exposes its processed image as _uw_frame. Keep all
         # version-specific access here. Check both annotators before invoking
         # its GPU kernel; an RGB frame alone does not guarantee depth readiness.
         start = time.perf_counter_ns() if timings is not None else None
         width, height = self.cfg["stereo"]["resolution"]
-        for cam in self.cameras.values():
-            if cam._rgba_annot.get_data().size == 0 or cam._depth_annot.get_data().size == 0:
-                if timings is not None:
-                    timings["annotator_acquisition_ms"] += (time.perf_counter_ns() - start) / 1e6
-                return None
+        with tracy_zone("ROV/StereoAnnotatorReadiness", tracy):
+            for cam in self.cameras.values():
+                if cam._rgba_annot.get_data().size == 0 or cam._depth_annot.get_data().size == 0:
+                    if timings is not None:
+                        timings["annotator_acquisition_ms"] += (time.perf_counter_ns() - start) / 1e6
+                    return None
         if timings is not None:
             timings["annotator_acquisition_ms"] += (time.perf_counter_ns() - start) / 1e6
             start = time.perf_counter_ns()
         frames = {}
         for side, cam in self.cameras.items():
-            cam.render()
-            frame = cam._uw_frame
+            if diagnostic_mode:
+                frame = self._render_camera_diagnostic(cam, side, diagnostic_mode, timings, tracy)
+                if diagnostic_mode == "no-readback":
+                    if frame is None:
+                        return None
+                    continue
+            else:
+                cam.render()
+                frame = cam._uw_frame
             if frame is None or frame.shape[:2] != (height, width):
                 if timings is not None:
                     timings["processing_readback_combined_ms"] += (time.perf_counter_ns() - start) / 1e6
                 return None
-            frames[side] = frame.copy()
+            frames[side] = frame.copy() if not diagnostic_mode else frame
         if timings is not None:
             timings["processing_readback_combined_ms"] += (time.perf_counter_ns() - start) / 1e6
         return frames
+
+    @staticmethod
+    def _render_camera_diagnostic(cam, side, mode, timings, tracy):
+        """OceanSim 1.0.0 render stages, split only for opt-in profiling."""
+        if cam._viewport or cam._writing:
+            raise RuntimeError("Diagnostic OceanSim path requires headless capture without camera writing")
+        import warp as wp
+        from isaacsim.oceansim.utils.UWrenderer_utils import UW_depth_turbidity_attenuator, UW_render
+
+        with tracy_zone(f"ROV/{side}/OceanSimAnnotatorFetch", tracy):
+            raw_rgba = cam._rgba_annot.get_data()
+            depth = cam._depth_annot.get_data()
+        if raw_rgba.size == 0 or depth.size == 0:
+            return None
+        processing_start = time.perf_counter_ns()
+        with tracy_zone(f"ROV/{side}/OceanSimRGB", tracy):
+            uw_image = wp.zeros_like(raw_rgba)
+            wp.launch(dim=np.flip(cam.get_resolution()), kernel=UW_render,
+                      inputs=[raw_rgba, depth, cam._backscatter_value, cam._atten_coeff,
+                              cam._backscatter_coeff], outputs=[uw_image])
+        with tracy_zone(f"ROV/{side}/OceanSimDepth", tracy):
+            degraded_depth = wp.zeros_like(depth)
+            wp.launch(dim=np.flip(cam.get_resolution()), kernel=UW_depth_turbidity_attenuator,
+                      inputs=[raw_rgba, depth, cam._max_range, cam._backscatter_value,
+                              cam._atten_coeff, cam._backscatter_coeff, cam._depth_noise_sigma,
+                              int(cam._id)], outputs=[degraded_depth])
+        readback_start = time.perf_counter_ns()
+        if timings is not None:
+            timings["underwater_processing_ms"] += (readback_start - processing_start) / 1e6
+        if mode == "no-readback":
+            cam._profile_gpu_arrays = (uw_image, degraded_depth)
+            cam._id += 1
+            return True
+        with tracy_zone(f"ROV/{side}/CPUReadback", tracy):
+            cam._uw_frame = uw_image.numpy()
+            cam._degraded_depth_frame = np.ascontiguousarray(degraded_depth.numpy(), dtype=np.float32)
+            frame = cam._uw_frame.copy()
+        if timings is not None:
+            timings["gpu_readback_ms"] += (time.perf_counter_ns() - readback_start) / 1e6
+        cam._id += 1
+        return frame
 
     def close(self):
         if self._closed:
