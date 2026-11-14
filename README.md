@@ -1,102 +1,150 @@
-# Isaac Sim + OceanSim ROV inspection simulator
+# Isaac Sim 6.1 + OceanSim ROV inspection simulator
 
-A standalone Python application for an underwater inspection tank, a kinematic OceanSim BlueROV, and vehicle-mounted underwater stereo cameras. Launch from PowerShell using Isaac Sim's bundled Python. The original pipes, fixtures, inspection panel, markers and crates are preserved from `rov_tank_builder.py`.
+A standalone Windows application for an underwater inspection tank, a kinematic
+OceanSim BlueROV and vehicle-mounted underwater stereo cameras. The original
+pipes, fixtures, inspection panel, markers, crates, camera calibration and
+change-detection trajectory are retained.
 
-Implementation and CPU checks are complete. Two earlier Windows runs completed 10 and 30 stereo pairs, but neither recorded PNGs; the graphics API and physical caustics still need visual confirmation. A later validation attempt could not read part of the Isaac Sim installation in this restricted session. See the [latest runtime validation record](RUNTIME_VALIDATION_2026-11-04.md) and [original validation note](docs/VALIDATION.md).
+The validated OceanSim dependency is the Git submodule at
+[`third_party/OceanSim`](third_party/OceanSim), forked from
+[`umfieldrobotics/OceanSim`](https://github.com/umfieldrobotics/OceanSim) into
+[`LuisCarvalho314/OceanSim`](https://github.com/LuisCarvalho314/OceanSim).
+Its pinned revision is `53c45e5c3aafa3c6ce44a344b07a082a980633ef`.
+The fork preserves upstream history, BSD-3-Clause licensing and attribution.
+Do not replace this checkout with a separately installed OceanSim copy.
 
-## Prerequisites and inspected versions
+## Prerequisites and validated build
 
-- Windows and an NVIDIA RTX GPU/driver compatible with Isaac Sim 5.0 and OceanSim's CUDA/Warp rendering.
-- Isaac Sim 5.0 bundled Python. The inspected local source build reports `5.0.0-rc.45+mr.0.1791e148.local`; it is not the final 5.0 release build.
-- Existing OceanSim installation. Its inspected manifest reports **1.0.0**. The actual `UW_Camera`, `WaterSurface`, asset registration and local Isaac Sim/Kit sources determine this implementation. No OceanSim source files are modified.
-- OceanSim's registered assets, including `Bluerov/BROV_low.usd`, and its `demo/water_material/Water.mdl` material.
-- Packages already required by Isaac Sim/OceanSim: NumPy, Warp, Replicator and PyYAML. No separate virtual environment, C++, ROS 2 integration, OpenCV or image-writing package is required.
-- Optional MP4 previews require FFmpeg on `PATH`, including the `libx264` encoder, or an executable path in `output.preview.ffmpeg_executable`. On Windows, install an FFmpeg build with libx264 and check `ffmpeg -encoders`.
+- Windows, PowerShell, Git with submodule support and an NVIDIA RTX GPU.
+- Isaac Sim **6.1.0-rc.26+main.0.7c206f75.local**, using its bundled Python.
+  Validation used Kit 110, DirectX 12, RTX Real-Time 2.0, Warp 1.16.0,
+  an RTX 4070 Ti SUPER (16 GB) and NVIDIA driver 610.88.
+  Other 6.1 builds need their own validation, particularly the experimental cameras.
+- A working Isaac Sim installation with its supplied runtime dependencies,
+  graphics access and writable runtime/user caches. Both packaged and source-build
+  layouts are supported. Git does not distribute or build Isaac Sim.
+- External OceanSim assets, including `Bluerov/BROV_low.usd`. Follow the upstream
+  [asset download instructions](https://github.com/umfieldrobotics/OceanSim/blob/main/docs/subsections/installation.md).
+  Obtain and comply with each asset's license. Downloaded assets and NVIDIA
+  material libraries are not redistributed here. The upstream water MDL references
+  NVIDIA's external material library; it must be reachable or cached by the runtime.
+- Ordinary Python with NumPy for CPU tests and recording checks. Full offline
+  photometric analysis additionally uses OpenCV and Pillow; tested versions are in
+  [requirements-tools.txt](requirements-tools.txt). Use Isaac Sim's bundled
+  packages for simulation; do not install these tools over its runtime packages.
+- Optional MP4 previews need FFmpeg with `libx264` on PATH, or a configured
+  `output.preview.ffmpeg_executable`.
 
-The active extension found here is `C:\isaacsim\_build\windows-x86_64\release\extsUser\OceanSim`. An identical camera implementation exists in `C:\isaacsim-backup\extsUser\OceanSim`. Prefer the active extension. The old stereo preview was read from `C:\rov_sim\rov_stereo_preview.py`; that directory and all existing generated scenes are untouched.
-
-## Windows launch
-
-From PowerShell:
-
-```powershell
-Set-Location C:\isaacsim-environments
-
-# This machine has a source build; use its release runtime.
-$python = 'C:\isaacsim\_build\windows-x86_64\release\python.bat'
-$env:OCEANSIM_EXT_PATH = 'C:\isaacsim\_build\windows-x86_64\release\extsUser\OceanSim'
-
-# Phase 1: start Kit, register/enable OceanSim, then close.
-& $python run.py --startup-only
-
-# Tank, BlueROV and two OceanSim processed-image preview windows.
-& $python run.py --scene tank --mode interactive
-
-# Short GUI smoke test; exits after 10 stereo pairs.
-& $python run.py --scene tank --mode interactive --frames 10
-
-# Offscreen RTX rendering; no OceanSim preview windows.
-& $python run.py --scene tank --mode headless --frames 30
-
-# Repeatable before/after inspection and paired PNG/pose capture.
-& $python run.py --scene tank --experiment change_detection --mode headless --record
-
-# Record PNGs and automatically encode stereo plus before/after MP4 previews.
-& $python run.py --scene tank --experiment change_detection --headless --frames 60 --record --preview-mp4
-```
-
-For a packaged installation with `python.bat` directly in `C:\isaacsim`:
+## Fresh checkout and asset setup
 
 ```powershell
-C:\isaacsim\python.bat run.py --scene tank --mode interactive
+git clone --recurse-submodules https://github.com/LuisCarvalho314/rov-sim.git
+Set-Location rov-sim
+# For an existing checkout:
+git submodule update --init --recursive
+git submodule status
+
+# Set these to your own installation and downloaded asset directories.
+$env:ISAAC_SIM_PATH = 'D:/NVIDIA/isaacsim'
+$env:OCEANSIM_ASSET_PATH = 'D:/assets/OceanSim_assets'
+# Clear any old installed-extension override so the pinned checkout is selected.
+Remove-Item Env:OCEANSIM_EXT_PATH -ErrorAction SilentlyContinue
+. ./runtime.ps1
+$runtime = Resolve-IsaacPython $env:ISAAC_SIM_PATH
 ```
 
-Configure a different installation through the launcher:
+`ISAAC_SIM_PATH` may name a packaged runtime or a source-build root containing
+`_build/windows-x86_64/release/python.bat`. Launchers also accept an explicit
+`-IsaacSimPath` or `-SimRoot`. Machine paths are never required in tracked configs.
+
+The fork reads `OCEANSIM_ASSET_PATH` first. Alternatively persist registration
+locally with `python third_party/OceanSim/config/register_asset_path.py 'D:/assets/OceanSim_assets'`.
+The resulting `asset_path.json` is ignored. Asset downloads stay outside both repos.
+No extension copying or modification of the Isaac Sim installation is required.
+
+## Launch and reproduce change detection
 
 ```powershell
-$env:ISAAC_SIM_PATH = 'D:\NVIDIA\isaacsim'
-.\launch.ps1 -RunArguments @('--scene', 'tank', '--mode', 'interactive')
-
-# Or pass a root directly; source-build layouts are detected.
-.\launch.ps1 -IsaacSimPath 'C:\isaacsim' -RunArguments @('--headless', '--frames', '10')
+# Activate the pinned OceanSim extension, then close.
+./launch.ps1 -RunArguments @('--headless','--startup-only')
+# Interactive tank and original legacy stereo backend.
+./launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml')
+# Recommended experimental CameraSensor backend; two existing physical views.
+./launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor')
+# Original 60-frame trajectory per pass and 0.5 m crate relocation.
+& $runtime -u run.py --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
 ```
 
-The launcher defaults to `C:\isaacsim` only when neither `-IsaacSimPath` nor `ISAAC_SIM_PATH` is supplied. Direct invocation must use the selected installation's bundled Python; configuration cannot switch an already running interpreter.
+`legacy` remains the default and fallback. `--camera-backend tiled` selects the
+experimental two-view TiledCameraSensor, including the required pose flush.
+All backends retain the original scene, optical calibration and OceanSim Warp
+underwater equations. The selected photometric profile adds inspection lamps,
+fixed ACES/ISO 1600 exposure and DLAA. `configs/tank_photometric_baseline.yaml`
+retains the original lighting profile; `configs/tank_legacy.yaml` selects legacy RTX
+photon caustics. The new camera APIs use version-specific internals and can change.
 
-Interactive preview runs until the application closes or Ctrl+C is pressed. `--frames N` bounds a run. Headless preview defaults to 120 frames. An experiment defaults to 60 frames **per pass**, then exits, including in GUI mode. `--frames 0` is allowed only for unbounded interactive preview. The application controls rendering and time; pressing timeline Play is unnecessary. Ordinary preview starts at `robot.position_m` and `robot.rotation_xyz_deg`; configured trajectories are used for experiments.
+Each invocation creates a unique ignored directory under `outputs/`, containing
+resolved config, calibration, render settings, scene snapshots, status, paired PNGs
+and ground-truth poses. `--frames N` bounds frames per experiment pass. Experiments
+default to 60 per pass; headless preview defaults to 120; interactive preview may
+run until closed. The application owns time and rendering; timeline Play is unnecessary.
+`--output-dir` selects a different root. `--record --preview-mp4` adds MP4 previews.
+
+## Validation and benchmarks
+
+```powershell
+python -m pip install -r requirements-tools.txt
+python -m unittest discover -s tests -q
+& $runtime run.py --validate-only
+# Known target, synchronization, radial range, disparity, PNG and pose checks.
+& $runtime -u run.py --headless --config configs/validation_6_1.yaml --camera-backend camera-sensor --experiment change_detection --frames 12 --record --stereo-diagnostics
+# Pass the actual unique run folder printed above:
+python validate_recording.py outputs/YOUR_RUN_FOLDER
+# Startup, legacy stationary/moving checks, three benchmarks and a separate profile.
+./validate_6_1.ps1
+# Original trajectory, selected photometry, all three backends and matched benchmarks.
+& $runtime -u camera_backend_suite.py --root outputs/camera_reproduction
+python compare_camera_backends.py outputs/camera_reproduction
+python evaluate_photometry.py outputs/camera_reproduction/validation --profiles legacy camera-sensor tiled
+& $runtime -u verify_camera_scene.py outputs/camera_reproduction
+# Individual uninstrumented moving benchmark; keep diagnostics separate.
+& $runtime -u run.py --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --benchmark --frames 100
+```
+
+Use fresh evidence roots; suites refuse to overwrite prior captures. Validate
+`status.json`, the startup success marker and console errors as well as process
+exit codes: Kit's Windows wrapper can return zero after a failure. Raw-buffer
+diagnostics, image analysis and profiling run separately from throughput trials.
+See [6.1 validation](docs/ISAAC_SIM_6_1_VALIDATION.md),
+[photometric reproduction](docs/PHOTOMETRIC_6_1.md),
+[camera comparison and synchronization](docs/RTX_CAMERA_6_1.md), and
+[version-control validation](docs/REPRODUCIBILITY.md).
+
+Matched historical moving measurements deliver **9.642 pairs/s** (legacy),
+**12.612 pairs/s** (CameraSensor) and **10.784 pairs/s** (synchronized tiled).
+The **20 Hz processed stereo target remains unmet**. These are hardware/build
+specific measurements, separate from the short submodule smoke tests.
+Experimental APIs, temporal denoising and stochastic rendering limit portability
+and pixel repeatability. No thruster dynamics, SLAM, learned change detector,
+real lens/housing refraction or real underwater calibration are implemented.
+The experiment validates a 0.5 m relocation; 0.1 m detection accuracy is unproven.
+The [5.0/6.1 assessment](docs/ISAAC_SIM_5_0_VS_6_1.md) is retained as historical
+evidence; its 5.0 comparison was blocked by cross-linked installations.
 
 ## Configuration and extension loading
 
-Edit [configs/tank.yaml](configs/tank.yaml), or use `--config configs/my_tank.yaml`. The supplied file uses JSON-style YAML, which is valid YAML and readable with the standard library **before** Kit loads its packages. Conventional YAML works when PyYAML is already importable before startup.
+Edit [configs/tank.yaml](configs/tank.yaml), or pass `--config` for another profile.
+Relative paths resolve against this repository and accept environment variables
+such as `${ROV_OUTPUT_ROOT}`. Supplied configs use JSON-style YAML, readable before
+Kit starts; other YAML requires PyYAML in the launching interpreter.
 
-Relative paths resolve against this repository, even from another working directory. Paths accept environment variables such as `${ROV_OUTPUT_ROOT}`. In JSON-style YAML, use forward slashes or escaped backslashes for Windows paths.
-
-| Configuration | Controls |
-| --- | --- |
-| `runtime` | Backend, renderer, optional extension directory/Kit experience and extra Kit arguments |
-| `tank`, `lighting` | Dimensions, thickness, colours, overhead light positions, size and intensity |
-| `robot` | Registered asset-relative filename, vehicle pose, visual-model alignment/scale |
-| `stereo` | Resolution, baseline, focal/aperture ratio, clipping, preview and mounting pose |
-| `underwater` | Named attenuation/backscatter values, range and depth noise |
-| `water` | Surface height/dimensions/grid, shadow casting and wave parameters |
-| `rtx` | Photon budget/bounces/filtering and registered RTX setting overrides |
-| `changes` | Reference crate position and displacement vector |
-| `experiment` | Frames per pass and frame-indexed vehicle waypoints |
-| `output` | Output root, paired PNG recording and optional MP4 preview settings |
-
-`output.preview.enabled` defaults to `false`; `--preview-mp4` enables it for one run. Preview generation requires `--record` or `output.record_images=true`. Configure `output.preview.fps` (default 30), `crf` (default 20), `preset` (default `medium`), and optional `ffmpeg_executable`. The H.264 codec is `libx264`. Preview frame rate changes playback speed only; simulation timing and PNG timestamps stay unchanged.
-
-Examples of individual edits in the existing file: set `water.wave.animated` to `true`, `water.wave.amplitude_m` to `0.03`, `underwater.atten_coeff` to `[0.12, 0.06, 0.03]`, or `output.directory` to `"${ROV_OUTPUT_ROOT}/inspection"`. When changing tank dimensions, resize `water.size_m` and check fixed equipment: its preserved fixture coordinates are designed for the 8 × 5 m tank and do not automatically rescale.
-
-OceanSim's directory is selected in this order: `--oceansim-ext`, `OCEANSIM_EXT_PATH`, `runtime.oceansim_extension`, then `extsUser/OceanSim` under the runtime's `ISAAC_PATH`/configured `ISAAC_SIM_PATH`, including source-build layout. Pass the **extension directory containing `config/extension.toml`**, not the assets directory. The app registers its parent search path, checks which exact extension Kit resolved and enables it synchronously. Duplicate registrations produce an error.
-
-BlueROV assets resolve through OceanSim's existing `get_oceansim_assets_path()` registration. If missing, use OceanSim's registration command once with your asset location:
-
-```powershell
-& $python "$env:OCEANSIM_EXT_PATH\config\register_asset_path.py" 'C:\isaacsim-assets\OceanSim_assets'
-```
-
-This is an installation repair, not part of startup. The application does not rewrite extension source or asset registration files.
+OceanSim lookup order is `--oceansim-ext`, `OCEANSIM_EXT_PATH`,
+`runtime.oceansim_extension`, **the pinned `third_party/OceanSim` checkout**, then
+installation `extsUser/OceanSim` fallbacks. Explicit overrides are available for
+development; reproducibility requires the pinned checkout. The extension path
+must contain `config/extension.toml`, and must not point to the asset directory.
+Startup verifies Kit loaded the requested directory and rejects unresolved or
+ambiguous registrations. Configure assets independently using `OCEANSIM_ASSET_PATH`.
 
 ## Coordinate frames and calibration
 
@@ -122,13 +170,13 @@ OceanSim 1.0.0's `UW_param` docstring and implementation disagree about attenuat
 
 `WaterSurface` creates OceanSim's mesh and refractive MDL on the active stage. One instance survives the run. Optional `deform()` calls use logical simulation time; both passes reset to the same wave phase. Zero amplitude preserves the flat grid, avoiding OceanSim's positive amplitude clamp.
 
-Windows defaults to **DirectX 12**: `--/app/vulkan=false` reaches `SimulationApp` **before graphics startup**, with legacy `RaytracedLighting`. Installed `.kit` files are untouched. Use `--backend vulkan` for a separate alternative-backend validation run. Other launch flags go in `runtime.extra_args` or, for example, `--kit-arg=--/renderer/activeGpu=0`.
+Windows defaults to **DirectX 12**: `--/app/vulkan=false` reaches `SimulationApp` **before graphics startup**. `runtime.renderer` defaults to `RealTimePathTracing`; `configs/tank_legacy.yaml` selects `RaytracedLighting` with photon caustics. This installed Isaac Sim 5.0 / Kit 107 build crashes when only the RTX 2.0 mode flag is enabled. The startup code uses [NVIDIA's Isaac Sim 5.0 recipe](https://forums.developer.nvidia.com/t/enable-new-rtx-realtime-2-0-in-simulationapp/342829/9): it enables both real-time modes and selects `RealTimePathTracing` in persistent and active Kit settings before viewport creation. These settings agree with `SimulationApp`'s renderer argument. RTX 2.0 uses Kit's fast shutdown after the application's explicit camera, water and Replicator cleanup; graceful shutdown caused a process access violation on this build. DLSS antialiasing is disabled for this comparison and Frame Generation is not enabled. Use `--backend vulkan` for a separate alternative-backend validation run. Other nonrenderer launch flags go in `runtime.extra_args` or, for example, `--kit-arg=--/renderer/activeGpu=0`.
 
-Photon caustics use the installed `WaterSurface.set_caustics()` API and source-verified **`light:enableCaustics`** property. The standalone app replaces the original builder's speculative `inputs:enableCaustics`. A multiplier of 40 means approximately 40 × 1024 photons per area light. Additional `rtx.settings` keys must already be registered by the running build; unknown paths fail.
+Legacy photon caustics use the installed `WaterSurface.set_caustics()` API and source-verified **`light:enableCaustics`** property. The standalone app replaces the original builder's speculative `inputs:enableCaustics`. A multiplier of 40 means approximately 40 × 1024 photons per area light. Additional `rtx.settings` keys must already be registered by the running build; unknown paths fail.
 
-`render_validation.json` records requested backend, `/app/vulkan`, renderer, bound material and photon settings. Readback shows settings were applied; it **does not prove the GPU/backend produced physical caustics**. Inspect the Kit log's actual graphics API, water refraction and illuminated floor. Do not infer Vulkan/DX12 equivalence from matching settings. NVIDIA documents these photon controls for [RTX Real-Time Legacy](https://docs.omniverse.nvidia.com/materials-and-rendering/latest/rtx-renderer_rt_legacy.html#caustics).
+`render_validation.json` records requested renderer, renderer setting readback, backend setting, RTX 2.0 mode flag, DLSS antialiasing, subframes, legacy photon settings and whether a processed stereo pair was acquired. A frame proves the capture path ran; it does not prove physical refraction, attenuation or caustics are visually correct. Inspect recorded PNGs and the Kit graphics API log. Photon caustics are supported only in the legacy profile. NVIDIA documents these controls for [RTX Real-Time Legacy](https://docs.omniverse.nvidia.com/materials-and-rendering/latest/rtx-renderer_rt_legacy.html#caustics).
 
-Physical RTX caustics arise from light transport through refractive water. `UW_Camera` separately applies image-space, depth-based attenuation and backscatter. An ordinary viewport can show the physical surface/caustics without the underwater appearance of processed camera streams. Water is a visual surface; no fluid volume or buoyancy is simulated.
+Legacy physical RTX caustics arise from light transport through refractive water. `UW_Camera` separately applies image-space, depth-based attenuation and backscatter. An ordinary viewport can show the physical surface/caustics without the underwater appearance of processed camera streams. Water is a visual surface; no fluid volume or buoyancy is simulated.
 
 ## Experiments and output
 
@@ -209,7 +257,7 @@ CPU checks using ordinary Python with NumPy, or the configured bundled Python:
 | Black/empty streams | Confirm D3D12 in logs, submerged cameras, clear housing/mount and working RTX/Replicator. Try bounded GUI mode and increase warmup/readiness for compilation if needed. |
 | Model size/heading wrong | Inspect manifest units/bounds, then adjust `robot.model` alignment/scale against the actual asset. |
 | Plain viewport lacks underwater tint | Inspect OceanSim preview windows or recorded PNGs; attenuation is separate from the water material. |
-| No visible caustics | Check graphics API/render mode, refractive MDL, `light:enableCaustics`, light placement and floor illumination. Compare caustics on/off runs. |
+| No visible legacy caustics | Select `tank_legacy.yaml`; check graphics API/render mode, refractive MDL, `light:enableCaustics`, light placement and floor illumination. Compare caustics on/off runs. |
 | Background images differ | Match config, trajectory, seed, phase and warmup; evaluate residual photon/denoiser history separately. |
 
 Sources: [OceanSim UW_Camera](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/sensors/UW_Camera.py), [WaterSurface](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/watersurface/WaterSurface.py), [Isaac Sim 5.0 SimulationApp](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/py/source/extensions/isaacsim.simulation_app/docs/index.html). Installed sources take precedence over newer upstream APIs.
@@ -225,6 +273,23 @@ The standard tank config does not record PNGs. Benchmark mode skips pose and ima
 
 The run directory contains `benchmark.json` and `benchmark_frames.csv`, alongside the resolved config, render validation and status files. Progress prints every 100 pairs. Effective pairs/s is measured wall-clock throughput across completed CPU stereo pairs, including retries and gaps between measured iterations. The 50 ms deadline uses individual acquisition latency. Simulation-time 30 FPS and GUI viewport FPS are separate measures.
 
+Benchmark mode creates its run directory before starting Kit and supervises Kit in a child process. `status.json` records the process exit code, including a native renderer crash before `SimulationApp` returns; `kit_console.log` keeps the child console output. A crash is reported as a failed run even if Kit wrote a partial `benchmark.json` before failing during shutdown.
+
+Add `--profile-python` to a benchmark command to save `python_profile.pstats` before Kit shuts down. This profiles application setup, warmup and capture; use `pstats` to inspect call counts and time in OceanSim, Replicator and Python I/O. Profiling adds overhead, so use the ordinary benchmark for throughput comparisons.
+
+For a 100-frame RTX 2.0 stage comparison, use the same A profile for all three runs:
+
+```powershell
+python benchmark_profiles.py
+.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','render-only')
+.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','no-readback')
+.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','full')
+```
+
+`--profile-tracy` enables the installed Kit Tracy extension and captures `capture.tracy` in each run directory. The CPU zones separate the blocking stereo render step, RGB/depth annotator fetch, OceanSim RGB and depth kernel submission, and CPU readback. View the trace with the Tracy viewer supplied by Isaac Sim. Add `--profile-warp-gpu` when numeric Warp CUDA kernel, copy and memset activity durations are needed; this explicitly synchronizes at the **end** of the measured run and adds profiling overhead. It is off by default. Tracy's RTX/DX12 GPU timeline is not included in Warp's CUDA totals.
+
+Render-only counts blocking stereo render steps; no-readback submits both OceanSim RGB/depth kernels without calling `.numpy()` and reports a final GPU drain separately; full counts acquired CPU stereo pairs. Render-only and no-readback acquire one normal OceanSim stereo pair **after** measured frames to validate dimensions and nonblack left/right images. The diagnostic OceanSim path mirrors the installed OceanSim 1.0.0 `UW_Camera.render()` kernel calls, while ordinary runs continue to use that method directly. All three modes retain the same cameras, scene, trajectory, water animation, warmup, backend, renderer and image quality settings. The stage timers are CPU wall times: `underwater_processing_ms` measures GPU submission, and `gpu_readback_ms` includes transfer and any wait for pending GPU work. Use the trace to locate GPU stalls; do not interpret either timer as pure GPU execution time.
+
 Generate comparable profiles and run each under the same machine and driver conditions:
 
 ```powershell
@@ -232,12 +297,13 @@ python benchmark_profiles.py
 .\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/A.yaml')
 .\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/B.yaml')
 .\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/C.yaml')
-.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/D.yaml')
-python compare_benchmarks.py outputs/<A-run-id> outputs/<B-run-id> outputs/<C-run-id> outputs/<D-run-id>
+python compare_benchmarks.py --latest-profiles outputs
 ```
 
-The A–D configs change only RTX caustics, RTX subframes and recording (A: on/4/off; B: on/1/off; C: off/1/off; D: on/1/on). The report stores the full resolved config for checking other settings.
+The A–C profiles use identical geometry, stereo calibration, trajectory, warmup, underwater processing and one RTX subframe. A uses RTX 2.0 with caustics off; B uses legacy RTX with caustics off; C uses legacy RTX with photon caustics on. All disable DLSS and PNG recording. Each command processes 300 stereo pairs. `benchmark.json` and the comparison output label the renderer. Do not commit measured results unless needed for a separate report.
 
-`render_ms` is the blocking `rep.orchestrator.step(wait_for_render=True)` wall time. `annotator_acquisition_ms` covers the external RGB/depth readiness calls. OceanSim's `UW_Camera.render()` fetches those annotators again, launches RGB and degraded-depth Warp kernels, then calls `.numpy()` on both results. Those internal fetches, GPU processing and CPU readback are measured together as `processing_readback_combined_ms`; `underwater_processing_ms` and `gpu_readback_ms` are explicitly unavailable. This avoids attributing asynchronous CUDA work to a Python call without a GPU synchronization boundary. `recording_ms` includes pose validation and, when enabled, PNG and pose writes. FFmpeg is timed separately after capture. Stage timing sums need not equal total acquisition because Python and pose bookkeeping also consume time.
+`--latest-profiles outputs` locates the newest completed 300-pair run for each A/B/C profile. It reports a missing profile if any run has not completed. You can also pass three actual run directories or `benchmark.json` files directly; angle-bracket names in examples are placeholders and must never be typed literally in PowerShell.
 
-Once the slowest stage is known, run that same benchmark under NVIDIA Nsight Systems with CUDA and CPU tracing, or use Isaac Sim's Tracy support if installed. Compare the instrumented run with an ordinary benchmark because GPU tracing can add overhead. For a kernel/readback split, add CUDA events or Warp profiling inside OceanSim's camera implementation in an isolated diagnostic copy; do not infer it from the existing wall-clock fields.
+In an ordinary benchmark without `--profile-tracy`, `render_ms` is the blocking `rep.orchestrator.step(wait_for_render=True)` wall time. `annotator_acquisition_ms` covers the external RGB/depth readiness calls. OceanSim's `UW_Camera.render()` fetches those annotators again, launches RGB and degraded-depth Warp kernels, then calls `.numpy()` on both results. Those internal fetches, GPU processing and CPU readback are measured together as `processing_readback_combined_ms`; `underwater_processing_ms` and `gpu_readback_ms` are explicitly unavailable. This avoids attributing asynchronous CUDA work to a Python call without a GPU synchronization boundary. `recording_ms` includes pose validation and, when enabled, PNG and pose writes. FFmpeg is timed separately after capture. Stage timing sums need not equal total acquisition because Python and pose bookkeeping also consume time.
+
+Compare instrumented runs with an ordinary benchmark because tracing and GPU activity timing can add overhead. For a finer RTX/DX12 breakdown, inspect the captured Tracy GPU timeline; Warp timing covers CUDA work only. A long CPU readback zone may be a wait for earlier GPU work rather than a long GPU copy.
