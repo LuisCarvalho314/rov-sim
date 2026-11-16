@@ -98,6 +98,12 @@ Follow the [README](../README.md) for fresh clone, submodule initialization,
 external assets, runtime selection, CameraSensor launch, validation and benchmarks.
 For a short check, use its geometric command and set `--frames 12` on the selected
 photometric change-detection command. For the full matched comparison use
-`camera_backend_suite.py`, followed by `compare_camera_backends.py` and
-`verify_camera_scene.py`. Those tools include frame freshness, stale-pose rejection,
+`rov_sim/tools/benchmarking/camera_backend_suite.py`, followed by `rov_sim/tools/benchmarking/compare_camera_backends.py` and
+`rov_sim/tools/validation/verify_camera_scene.py`. Those tools include frame freshness, stale-pose rejection,
 saved-buffer equations, scene preservation and the fork source-hash audit.
+
+Use fresh evidence roots after the repository cleanup; historical suite provenance
+intentionally cannot resume with the moved sources. The unchanged Script Editor
+reference is now `legacy/rov_tank_builder.py`, and the earlier runtime report is
+[archived](archive/RUNTIME_VALIDATION_2026-11-04.md). Recorded findings and source
+identities above remain historical evidence.

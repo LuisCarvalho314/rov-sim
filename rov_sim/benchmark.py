@@ -6,7 +6,7 @@ import platform
 import statistics
 from pathlib import Path
 
-from recording import write_json
+from rov_sim.recording import write_json
 
 TARGET_FPS = 20.0
 BUDGET_MS = 1000.0 / TARGET_FPS

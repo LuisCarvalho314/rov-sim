@@ -4,6 +4,8 @@ Checked on 2026-11-04 in WSL against the existing Windows installation. The Wind
 
 ## Completed checks
 
+Commands in this section are historical transcripts from the original layout; use the [current README](../README.md) for module commands.
+
 - Inspected the 471-line tank builder, generated manifest and README before editing. Found and read the stereo preview at `C:\rov_sim\rov_stereo_preview.py` without changing that directory.
 - Located the active source-build runtime and extension. Inspected versions: Isaac Sim `5.0.0-rc.45+mr.0.1791e148.local`, OceanSim manifest `1.0.0`, Kit kernel `107.3.1+isaac.206797.8131b85d`.
 - Verified `SimulationApp` supports the launch options used. The installed Python experience enables Vulkan by default; the launcher supplies `/app/vulkan=false` before Windows device creation.
@@ -24,10 +26,10 @@ Checked on 2026-11-04 in WSL against the existing Windows installation. The Wind
 Set the PowerShell runtime/extension variables from the README, then run:
 
 ```powershell
-& $python run.py --startup-only
-& $python run.py --scene tank --mode interactive --frames 10
-& $python run.py --scene tank --headless --frames 10 --record
-& $python run.py --scene tank --experiment change_detection --headless --frames 5 --record
+& $runtime -m rov_sim --startup-only
+& $runtime -m rov_sim --scene tank --mode interactive --frames 10
+& $runtime -m rov_sim --scene tank --headless --frames 10 --record
+& $runtime -m rov_sim --scene tank --experiment change_detection --headless --frames 5 --record
 ```
 
 1. **Startup:** confirm Kit reports D3D12, loads the requested OceanSim directory without dependency errors and exits cleanly.

@@ -24,7 +24,7 @@ def main():
     dll_directory = os.add_dll_directory(str(usd_libraries[0] / "bin"))
     from pxr import Usd, UsdGeom
     import numpy as np
-    from camera_backend_suite import BACKENDS
+    from rov_sim.config import BACKENDS
 
     def protected(stage):
         result = {}
@@ -72,9 +72,9 @@ def main():
                 camera_state[f"{backend}/{session}"][side] = {
                     "transform_max_difference": float(np.max(np.abs(matrix - expected))),
                     "authored_exposure": {a.GetName(): repr(a.Get()) for a in cam.GetAttributes() if a.GetName().startswith("exposure:")}}
-    from config import find_oceansim_extension, load_config
+    from rov_sim.config import ROOT, find_oceansim_extension, load_config
     ocean = find_oceansim_extension(load_config())
-    saved = json.loads(Path(__file__).with_name('docs').joinpath('oceansim_source_hashes.json').read_text())
+    saved = json.loads((ROOT / 'docs/oceansim_source_hashes.json').read_text())
     # Git may check text out with LF or CRLF on Windows. The fork manifest
     # hashes LF-normalized source, independently of core.autocrlf.
     changed = [row["relative_path"] for row in saved

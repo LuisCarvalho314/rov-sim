@@ -9,30 +9,35 @@ Windows, DirectX 12, RTX `RealTimePathTracing`, AA-off, one RT subframe, one NVI
 From PowerShell in `C:\rov-sim`:
 
 ```powershell
-.\validate_6_1.ps1
+.\scripts\validate_6_1.ps1
 ```
 
 Defaults: runtime selected through `ISAAC_SIM_PATH` or `-SimRoot`, pinned OceanSim checkout, 30 warmup frames, three stationary pairs, two 12-pair moving passes, three separate 100-pair uninstrumented benchmarks, then one separate 100-pair Tracy/Warp/Hydra profile. Every invocation creates a new ignored `outputs/validation_6_1_<UTC>/` directory. The runner requires process completion, application status, fresh run directories and error-free console logs; recording validation additionally decodes and compares saved PNG/NPZ data. The offline verifier uses the local `python` with NumPy. `-SimRoot`, `-BenchmarkFrames`, `-Repeats` and `-SkipProfiling` are supported. Keep 100 or more measured frames and three repetitions for baseline comparisons; short harness checks are not performance baselines.
 
 The launcher itself was executed with `-BenchmarkFrames 10 -Repeats 2 -SkipProfiling` and printed `ISAAC SIM 6.1 STEREO VALIDATION PASS`; fresh evidence is in `outputs/validation_6_1_20261114T130119Z/` and `outputs/validation_6_1/reproduction_check.log`. The full 100-pair measurements and profile below were run separately through the same application commands.
 
-Individual runs use the original entry point:
+Individual runs now use the module entry point (commands run from the repository root):
 
 ```powershell
-. ./runtime.ps1
+. ./scripts/runtime.ps1
 $runtime = Resolve-IsaacPython $env:ISAAC_SIM_PATH
-& $runtime -u run.py --headless --startup-only
-& $runtime -u run.py --headless --frames 3 --record --stereo-diagnostics --config configs/validation_6_1.yaml
-& $runtime -u run.py --headless --frames 12 --experiment change_detection --record --stereo-diagnostics --config configs/validation_6_1.yaml
-& $runtime -u run.py --headless --benchmark --frames 100 --config configs/validation_6_1.yaml
-& $runtime -u run.py --headless --benchmark --frames 100 --profile-tracy --profile-warp-gpu --config configs/validation_6_1.yaml
+& $runtime -u -m rov_sim --headless --startup-only
+& $runtime -u -m rov_sim --headless --frames 3 --record --stereo-diagnostics --config configs/validation_6_1.yaml
+& $runtime -u -m rov_sim --headless --frames 12 --experiment change_detection --record --stereo-diagnostics --config configs/validation_6_1.yaml
+& $runtime -u -m rov_sim --headless --benchmark --frames 100 --config configs/validation_6_1.yaml
+& $runtime -u -m rov_sim --headless --benchmark --frames 100 --profile-tracy --profile-warp-gpu --config configs/validation_6_1.yaml
 # Supply the actual run directory printed by the application:
-python validate_recording.py outputs/validation_6_1/final_moving/20261114T125607Z_d2850de9
+python -m rov_sim.tools.validation.validate_recording ACTUAL_NEW_RUN_DIR
 ```
 
 `configs/validation_6_1.yaml` retains the original tank, asset, water, optics and underwater parameters. It uses 30 warmup frames, disables preview windows and shortens the existing trajectory to frames 0–11, from `(-3.1,0,1.35)` to `(-2.6,0.12,1.40)` m and XYZ rotation `(0,0,0)` to `(1,-2,5)` degrees. Motion uses the existing interpolation and change-detection passes. Plain benchmarks hold the original vehicle pose; they still update the original animated water.
 
 ## Diagnosis and minimal changes
+
+Source paths and direct-script commands in this diagnosis are historical.
+Current application code is under `rov_sim/`; in-process diagnostics are under
+`rov_sim/diagnostics/` and validators under `rov_sim/tools/validation/`.
+The reproduction section above uses the current module commands.
 
 The first unchanged `python.bat` attempt failed before Python: its executable-copy setup could not write `kit/python/kit.exe` in the restricted session. Repeating with installation-write permission allowed the existing launcher to create its normal executable copy. Unmodified `run.py --startup-only` then activated OceanSim and exited successfully. No Isaac Sim rebuild, source patch or alternate simulation loop was required.
 

@@ -6,7 +6,7 @@ import copy
 import json
 from pathlib import Path
 
-from config import load_config, validate_config
+from rov_sim.config import load_config, validate_config
 
 
 PROFILES = {"A": ("RealTimePathTracing", False),

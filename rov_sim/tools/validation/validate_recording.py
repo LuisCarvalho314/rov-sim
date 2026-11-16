@@ -9,8 +9,8 @@ import zlib
 
 import numpy as np
 
-from experiments.change_detection import trajectory_pose
-from recording import write_json
+from rov_sim.experiments.change_detection import trajectory_pose
+from rov_sim.recording import write_json
 
 
 def read_png(path):

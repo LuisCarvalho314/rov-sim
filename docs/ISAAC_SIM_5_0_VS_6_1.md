@@ -15,6 +15,8 @@ attempted.
 
 ## Blocking finding
 
+Entry paths in the recorded attempt below are historical; current commands are in the [README](../README.md).
+
 `C:\isaacsim-5\_build\windows-x86_64\release\VERSION` reports
 `5.0.0-rc.45+mr.0.1791e148.local`, but its generated files resolve as follows:
 
@@ -183,7 +185,7 @@ validated runnable environment.
 
 ## Reproduction and remaining decision gate
 
-Reproduce the read-only audit, using existing NumPy/OpenCV/Pillow dependencies:
+Historical read-only audit command (the retained local script records the original source paths; use the [README](../README.md) for current reproduction):
 
 ```powershell
 python outputs/version_comparison_20261114/audit_saved_evidence.py
@@ -204,14 +206,14 @@ For each runtime/config, use fresh output roots with the existing commands:
 
 ```powershell
 # Set $runtime, $extension, $config and a unique $destination for each cell.
-& $runtime -u run.py --headless --oceansim-ext $extension --config $config --experiment change_detection --frames 60 --record --photometric-diagnostics --output-dir $destination
+& $runtime -u -m rov_sim --headless --oceansim-ext $extension --config $config --experiment change_detection --frames 60 --record --photometric-diagnostics --output-dir $destination
 # Repeat selected captures in another process; use baseline/recommended/
 # recommended_repeat parent names for the existing evaluators.
-python evaluate_photometry.py $evidenceRoot
-python summarize_photometry.py $evidenceRoot
+python -m rov_sim.tools.photometry.evaluate_photometry $evidenceRoot
+python -m rov_sim.tools.photometry.summarize_photometry $evidenceRoot
 # Separate performance jobs: at least three independent 300-pair processes
 # per runtime/config, interleaved sequentially across versions, no tracing.
-& $runtime -u run.py --headless --oceansim-ext $extension --config $config --benchmark --frames 300 --output-dir $benchmarkDestination
+& $runtime -u -m rov_sim --headless --oceansim-ext $extension --config $config --benchmark --frames 300 --output-dir $benchmarkDestination
 ```
 
 Keep geometry/calibration/trajectory/water and device/driver fixed; check settings

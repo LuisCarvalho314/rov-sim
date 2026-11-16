@@ -1,3 +1,5 @@
+> Historical report: commands and results below describe the original layout. See [current commands](../../README.md).
+
 # Windows runtime validation, 2026-11-04
 
 ## RTX 2.0 crash diagnosis and fix (later session)
@@ -12,7 +14,7 @@ A supervised 300-pair A run completed with exit code 0 and `status.json` complet
 
 The default `RealTimePathTracing` and explicit legacy `RaytracedLighting` profiles both passed CPU configuration validation. A new `--startup-only` attempt for each profile on this Windows host failed before renderer initialization: Kit could not read `c:/isaacsim/_build/windows-x86_64/release/exts/omni.pip.compute/pip_prebundle/cv2` (`PermissionError: [WinError 5] Access is denied`), and dependent extensions failed to start. Neither attempt printed the Phase 1 success marker. The default attempt's `python.bat` wrapper returned 0 despite Kit errors, so that exit code is not a successful smoke test. No RTX 2.0 frames, image appearance, or processed stereo throughput were measured in this migration. Repair the installation access and run the README's A/B/C benchmarks and short recorded image checks before drawing renderer comparisons.
 
-This record supplements [the original validation note](docs/VALIDATION.md), which predates the Windows runs below. Existing output directories were preserved.
+This record supplements [the original validation note](../VALIDATION.md), which predates the Windows runs below. Existing output directories were preserved.
 
 ## Evidence from earlier Windows runs
 

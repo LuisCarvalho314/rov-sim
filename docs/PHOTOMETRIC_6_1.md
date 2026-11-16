@@ -3,6 +3,12 @@
 Date: 2026-11-14. Isaac Sim 6.1.0-rc.26, OceanSim 1.0.0, DirectX 12,
 RTX Real-Time 2.0, RTX 4070 Ti SUPER, 752 x 480 per camera.
 
+Source paths in the recorded inspection below describe the original layout.
+Application/domain code now lives under `rov_sim/`, in-process diagnostics under
+`rov_sim/diagnostics/`, and photometric commands under `rov_sim/tools/photometry/`.
+The reproduction commands below use the current layout; see the
+[README](../README.md#architecture-and-extension-points) for interpreter and path rules.
+
 Use **`configs/tank_photometric.yaml`** for the selected configuration.
 `configs/tank.yaml` remains unchanged by this task;
 `configs/tank_photometric_baseline.yaml` preserves its starting contents.
@@ -272,24 +278,24 @@ Saved evidence root: `outputs/photometric_6_1/` (ignored by Git).
 Run from PowerShell in `C:\rov-sim` with the installed Isaac Sim environment:
 
 ```powershell
-. ./runtime.ps1
+. ./scripts/runtime.ps1
 $runtime = Resolve-IsaacPython $env:ISAAC_SIM_PATH
 # Use the pinned checkout; configure external assets with OCEANSIM_ASSET_PATH.
 Remove-Item Env:OCEANSIM_EXT_PATH -ErrorAction SilentlyContinue
-& $runtime -u run.py --headless --experiment change_detection --frames 60 --record --photometric-diagnostics --config configs/tank_photometric.yaml
+& $runtime -u -m rov_sim --headless --experiment change_detection --frames 60 --record --photometric-diagnostics --config configs/tank_photometric.yaml
 ```
 
 Recreate the controlled profiles into a **new** evidence directory:
 
 ```powershell
-python photometric_profiles.py --root outputs/photometric_repro/profiles
-.\run_photometric.ps1 -EvidenceRoot outputs/photometric_repro -Profiles baseline,light4,exposure4,shadow_off,water_depth10,dlaa,shadow_off_dlaa,lamps,lamps_dlaa,lamps_dlaa_iso800,lamps_dlaa_iso1600,recommended,recommended_repeat
-python evaluate_photometry.py outputs/photometric_repro
-python summarize_photometry.py outputs/photometric_repro
-.\validate_photometric.ps1 -EvidenceRoot outputs/photometric_repro/checks
-python evaluate_photometry.py outputs/photometric_repro/checks --profiles oriented
-python validate_photometry.py outputs/photometric_repro
-& $runtime -u verify_photometric_scene.py outputs/photometric_repro
+python -m rov_sim.tools.photometry.photometric_profiles --root outputs/photometric_repro/profiles
+.\scripts\run_photometric.ps1 -EvidenceRoot outputs/photometric_repro -Profiles baseline,light4,exposure4,shadow_off,water_depth10,dlaa,shadow_off_dlaa,lamps,lamps_dlaa,lamps_dlaa_iso800,lamps_dlaa_iso1600,recommended,recommended_repeat
+python -m rov_sim.tools.photometry.evaluate_photometry outputs/photometric_repro
+python -m rov_sim.tools.photometry.summarize_photometry outputs/photometric_repro
+.\scripts\validate_photometric.ps1 -EvidenceRoot outputs/photometric_repro/checks
+python -m rov_sim.tools.photometry.evaluate_photometry outputs/photometric_repro/checks --profiles oriented
+python -m rov_sim.tools.validation.validate_photometry outputs/photometric_repro
+& $runtime -u -m rov_sim.tools.validation.verify_photometric_scene outputs/photometric_repro
 python -m unittest discover -s tests -q
 ```
 

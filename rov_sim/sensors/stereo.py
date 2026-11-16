@@ -9,7 +9,7 @@ from contextlib import contextmanager
 import numpy as np
 from pxr import Gf, Usd, UsdGeom
 
-from robots.bluerov import VEHICLE_PATH
+from rov_sim.robots.bluerov import VEHICLE_PATH
 
 RIG_PATH = VEHICLE_PATH + "/StereoRig"
 CAMERA_PATHS = {side: RIG_PATH + "/" + side.title() for side in ("left", "right")}

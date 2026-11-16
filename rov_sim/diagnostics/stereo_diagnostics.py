@@ -8,8 +8,8 @@ import numpy as np
 import carb.settings
 import omni.timeline
 from pxr import Gf, Sdf, UsdGeom, UsdShade, UsdLux
-from recording import write_json, write_png
-from sensors.stereo import CAMERA_PATHS, world_matrix, validate_geometry
+from rov_sim.recording import write_json, write_png
+from rov_sim.sensors.stereo import CAMERA_PATHS, world_matrix, validate_geometry
 
 CFG = {"target_center_m": [1.35, -0.30, 1.65],
        "target_size_m": [0.02, 0.32, 0.24],
@@ -260,7 +260,7 @@ class StereoDiagnostics:
     def capture_overviews(self):
         """Inspection views after recording; no extra product during stereo capture."""
         import omni.replicator.core as rep
-        from robots.bluerov import set_pose
+        from rov_sim.robots.bluerov import set_pose
         set_pose(self.stage, self.cfg["robot"]["position_m"], self.cfg["robot"]["rotation_xyz_deg"])
         camera = UsdGeom.Camera.Define(self.stage, "/World/DiagnosticOverview")
         transform = camera.AddTransformOp()

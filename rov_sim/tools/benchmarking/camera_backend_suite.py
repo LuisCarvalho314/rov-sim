@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-BACKENDS = ("legacy", "camera-sensor", "tiled")
+from rov_sim.config import BACKENDS, ROOT
 
 
 def cases(repeats=3, frames=60, profiles=True, parity=True):
@@ -36,6 +36,7 @@ def cases(repeats=3, frames=60, profiles=True, parity=True):
 
 
 def run_case(root, name, backend, flags, frames, config, resume):
+    root, config = Path(root).resolve(), Path(config).resolve()
     destination = root / name
     arguments = ["--headless", "--config", str(config), "--camera-backend", backend,
                  "--experiment", "change_detection", "--frames", str(frames),
@@ -53,8 +54,8 @@ def run_case(root, name, backend, flags, frames, config, resume):
     print(f"RUN {name}", flush=True)
     started = time.monotonic()
     with (destination / "console.log").open("w", encoding="utf-8") as log:
-        child = subprocess.run([sys.executable, "-u", str(Path(__file__).with_name("run.py")), *arguments],
-                               stdout=log, stderr=subprocess.STDOUT, cwd=Path(__file__).parent)
+        child = subprocess.run([sys.executable, "-u", "-m", "rov_sim", *arguments],
+                               stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
     manifest.write_text(json.dumps({"arguments": arguments, "exit_code": child.returncode,
                                     "wall_s_including_startup": time.monotonic() - started}, indent=2))
     runs = list(destination.glob("*/status.json"))
@@ -70,7 +71,7 @@ def run_case(root, name, backend, flags, frames, config, resume):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--config", default="configs/tank_photometric.yaml")
+    parser.add_argument("--config", default=str(ROOT / "configs/tank_photometric.yaml"))
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--resume", action="store_true")
@@ -83,7 +84,7 @@ def main():
     root, config = Path(args.root).resolve(), Path(args.config).resolve()
     root.mkdir(parents=True, exist_ok=args.resume)
     digest = hashlib.sha256(config.read_bytes()).hexdigest()
-    source_files = [Path(__file__).parent / p for p in ("application.py", "run.py", "sensors/stereo.py", "sensors/rtx_stereo.py")]
+    source_files = [ROOT / p for p in ("rov_sim/application.py", "rov_sim/cli.py", "rov_sim/sensors/stereo.py", "rov_sim/sensors/rtx_stereo.py")]
     provenance = {"configuration": str(config), "configuration_sha256": digest,
                   "sources_sha256": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},
                   "isaac_path": os.environ.get("ISAAC_PATH")}

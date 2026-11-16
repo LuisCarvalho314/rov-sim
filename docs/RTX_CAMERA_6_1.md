@@ -14,7 +14,7 @@ Legacy and individual evidence is under `outputs/rtx_camera_6_1_final`. Correcte
 
 The initial tiled result of 13.43 pairs/s is **excluded**. Cross-backend validation caught two motion samples rendered at the previous vehicle pose despite fresh ReferenceTime and annotator compute counts. Their inferred wall displacement was 8.4743 mm, matching one original trajectory step of 8.4746 mm. A held-time `app.update()` before tiled capture removes that lag. The vehicle pose, wave phase and logical timestamp remain held; its additional rendering/update cost is included in corrected measurements. The geometric validator now requires 1 mm agreement on an independently known wall, and a regression test rejects this stale-pose case.
 
-The alternative acquisition implementation is isolated in `sensors/rtx_stereo.py`. `sensors/stereo.py` retains the original legacy implementation. No OceanSim source or underwater kernel is modified. Backend selection uses `stereo.backend`, overridden by `--camera-backend`.
+The alternative acquisition implementation is isolated in `rov_sim/sensors/rtx_stereo.py`. `rov_sim/sensors/stereo.py` retains the original legacy implementation. No OceanSim source or underwater kernel is modified. Backend selection uses `stereo.backend`, overridden by `--camera-backend`.
 
 | Installed API/source | Verified behavior |
 | --- | --- |
@@ -70,9 +70,9 @@ Full-run process RSS ranges were 9.46-9.72 GiB (legacy), 9.44-9.68 GiB (individu
 Use the new backend with the existing recorder:
 
 ```powershell
-. ./runtime.ps1
+. ./scripts/runtime.ps1
 $runtime = Resolve-IsaacPython $env:ISAAC_SIM_PATH
-& $runtime -u run.py --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
+& $runtime -u -m rov_sim --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
 ```
 
 Select `--camera-backend tiled` for the synchronized tiled alternative, or `legacy` for the original implementation. Unsupported experimental APIs fail explicitly. Calibration, pose conventions and recording files remain unchanged. Shutdown drains CUDA work while Kit is alive, detaches reference annotators, invokes the installed runtime's idempotent cleanup and releases arrays/products/windows. The application retains ownership of timeline, Replicator, water and SimulationApp shutdown.
@@ -80,20 +80,20 @@ Select `--camera-backend tiled` for the synchronized tiled alternative, or `lega
 Reproduce into a new directory, and perform offline image analysis after benchmarks finish:
 
 ```powershell
-& $runtime -u camera_backend_suite.py --root outputs/rtx_camera_repro
-python compare_camera_backends.py outputs/rtx_camera_repro
-python evaluate_photometry.py outputs/rtx_camera_repro/validation --profiles legacy camera-sensor tiled
-& $runtime -u verify_camera_scene.py outputs/rtx_camera_repro
+& $runtime -u -m rov_sim.tools.benchmarking.camera_backend_suite --root outputs/rtx_camera_repro
+python -m rov_sim.tools.benchmarking.compare_camera_backends outputs/rtx_camera_repro
+python -m rov_sim.tools.photometry.evaluate_photometry outputs/rtx_camera_repro/validation --profiles legacy camera-sensor tiled
+& $runtime -u -m rov_sim.tools.validation.verify_camera_scene outputs/rtx_camera_repro
 python -m unittest discover -s tests -q
 ```
 
-The final source automatically includes the tiled pose flush. The runner refuses to overwrite evidence; `--resume` requires matching arguments and acquisition-source hashes and skips only completed cases. `--only` can select cases. Runtime errors fail the suite even if Kit returns zero. All **43 CPU tests pass**, including fences, partial cleanup, backend selection, matched/drain-inclusive accounting and rejection of one-frame-old geometry.
+The final source automatically includes the tiled pose flush. The runner refuses to overwrite evidence; `--resume` requires matching arguments and acquisition-source hashes and skips only completed cases. After the repository cleanup, use a fresh root because source locations and hashes changed. `--only` can select cases. Runtime errors fail the suite even if Kit returns zero. The historical validation recorded **43 CPU tests passing**, including fences, partial cleanup, backend selection, matched/drain-inclusive accounting and rejection of one-frame-old geometry.
 
-To inspect the retained evidence, which spans the tiled-only synchronization correction:
+Historical reproduction commands for the retained evidence, which spans the tiled-only synchronization correction (these tools write audit reports; copy the evidence to a fresh root before rechecking):
 
 ```powershell
-python compare_camera_backends.py outputs/rtx_camera_6_1_final --tiled-root outputs/rtx_camera_6_1_tiled_flush
-& $runtime -u verify_camera_scene.py outputs/rtx_camera_6_1_final --tiled-root outputs/rtx_camera_6_1_tiled_flush
+python -m rov_sim.tools.benchmarking.compare_camera_backends outputs/rtx_camera_6_1_final --tiled-root outputs/rtx_camera_6_1_tiled_flush
+& $runtime -u -m rov_sim.tools.validation.verify_camera_scene outputs/rtx_camera_6_1_final --tiled-root outputs/rtx_camera_6_1_tiled_flush
 ```
 
 The individual backend provides a measured reason to use the new infrastructure on the operational 6.1 installation. This does not establish a 6.1-versus-5.0 version speedup or solve the 20 pairs/s requirement. Tiling reduces render-product count, but its required synchronization removes its apparent advantage here. Retain legacy as fallback and prefer individual sensors for this experiment.

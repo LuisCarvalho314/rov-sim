@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from benchmark import Benchmark, percentile
-from benchmark_profiles import PROFILES, main as profiles_main
-from compare_benchmarks import latest_profile_reports, main as compare_main
-from config import load_config
-from run import main, parse_args
+from rov_sim.benchmark import Benchmark, percentile
+from rov_sim.tools.benchmarking.benchmark_profiles import PROFILES, main as profiles_main
+from rov_sim.tools.benchmarking.compare_benchmarks import latest_profile_reports, main as compare_main
+from rov_sim.config import load_config
+from rov_sim.cli import main, parse_args
 
 
 class BenchmarkTests(unittest.TestCase):

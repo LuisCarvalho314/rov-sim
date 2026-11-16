@@ -4,10 +4,12 @@ import argparse
 import hashlib
 import json
 
+from rov_sim.config import ROOT
+
 import numpy as np
 from PIL import Image
 
-from evaluate_photometry import (read_json, poses, luminance, equipment_mask, change_mask,
+from rov_sim.tools.photometry.evaluate_photometry import (read_json, poses, luminance, equipment_mask, change_mask,
                                  features, reciprocal, session_metrics, stereo_metrics)
 
 
@@ -54,7 +56,7 @@ def validate(root, checks_root=None):
     selected=only_run(root/'recommended')
     repeat=only_run(root/'recommended_repeat')
     baseline=only_run(root/'baseline')
-    original=read_json('configs/tank_photometric_baseline.yaml')
+    original=read_json(ROOT / 'configs/tank_photometric_baseline.yaml')
     cfg=read_json(selected/'config.json')
     cal=read_json(selected/'stereo_calibration.json')
     assert cal==read_json(baseline/'stereo_calibration.json')==read_json(repeat/'stereo_calibration.json')
@@ -100,10 +102,10 @@ def validate(root, checks_root=None):
                      'mean_consecutive_abs_y':float(step.mean()),'p95_consecutive_abs_y':float(np.percentile(step,95))}
     hashes=[]
     extension=Path(read_json(selected/'status.json')['extension']['extension_directory'])
-    pinned = Path(__file__).parent/'third_party/OceanSim'
+    pinned = ROOT/'third_party/OceanSim'
     manifest = ('oceansim_source_hashes.json' if extension.resolve() == pinned.resolve()
                 else 'photometric_oceansim_hashes.json')
-    for item in read_json(Path(__file__).parent/'docs'/manifest):
+    for item in read_json(ROOT/'docs'/manifest):
         source=extension/item['relative_path']
         content = source.read_bytes()
         if manifest == 'oceansim_source_hashes.json':

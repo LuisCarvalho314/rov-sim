@@ -25,8 +25,8 @@ def trajectory_pose(points, frame):
 
 
 def prepare_pass(stage, cfg, pass_name):
-    from scenes.equipment import move_changed_object
-    from robots.bluerov import set_pose
+    from rov_sim.scenes.equipment import move_changed_object
+    from rov_sim.robots.bluerov import set_pose
 
     move_changed_object(stage, object_position(cfg, pass_name))
     set_pose(stage, *trajectory_pose(cfg["experiment"]["trajectory"], 0))

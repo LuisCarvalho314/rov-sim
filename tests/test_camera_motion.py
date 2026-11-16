@@ -1,7 +1,7 @@
 """Reject timestamp-fresh frames rendered at a stale vehicle pose."""
 import unittest
 import numpy as np
-from compare_camera_backends import wall_range_check
+from rov_sim.tools.benchmarking.compare_camera_backends import wall_range_check
 
 
 class CameraMotionTests(unittest.TestCase):

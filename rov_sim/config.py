@@ -6,7 +6,8 @@ import math
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
+BACKENDS = ("legacy", "camera-sensor", "tiled")
 
 
 def resolve_path(value, *, root=ROOT):
@@ -55,7 +56,7 @@ def validate_config(c):
 
     try:
         tank, water, robot, stereo = (c[k] for k in ("tank", "water", "robot", "stereo"))
-        if stereo.get("backend", "legacy") not in ("legacy", "camera-sensor", "tiled"):
+        if stereo.get("backend", "legacy") not in BACKENDS:
             raise ValueError("stereo.backend must be legacy, camera-sensor or tiled")
         for section, key in ((c["rtx"], "caustics"), (stereo, "preview"),
                              (water, "cast_shadows"), (water["wave"], "animated"),

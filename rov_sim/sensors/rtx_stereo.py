@@ -16,7 +16,7 @@ import omni.replicator.core as rep
 import warp as wp
 from pxr import UsdGeom
 
-from sensors.stereo import CAMERA_PATHS, StereoCameras, tracy_zone, validate_geometry, world_matrix
+from rov_sim.sensors.stereo import CAMERA_PATHS, StereoCameras, tracy_zone, validate_geometry, world_matrix
 
 
 def usd_intrinsics(stage, path, resolution):

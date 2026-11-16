@@ -14,14 +14,14 @@ import omni.replicator.core as rep
 import omni.timeline
 import omni.usd
 
-from config import resolve_path
-from environments.underwater import UnderwaterEnvironment, configure_rtx
-from experiments.change_detection import object_position, prepare_pass, trajectory_pose
-from recording import PoseRecorder, create_run_directory, write_json
-from preview import generate_previews
-from robots.bluerov import VEHICLE_PATH, build_bluerov, set_pose
-from scenes.tank import build_scene, build_inspection_lighting
-from sensors.stereo import CAMERA_PATHS, StereoCameras, build_stereo_rig, tracy_zone, world_matrix
+from rov_sim.config import resolve_path
+from rov_sim.environments.underwater import UnderwaterEnvironment, configure_rtx
+from rov_sim.experiments.change_detection import object_position, prepare_pass, trajectory_pose
+from rov_sim.recording import PoseRecorder, create_run_directory, write_json
+from rov_sim.preview import generate_previews
+from rov_sim.robots.bluerov import VEHICLE_PATH, build_bluerov, set_pose
+from rov_sim.scenes.tank import build_scene, build_inspection_lighting
+from rov_sim.sensors.stereo import CAMERA_PATHS, StereoCameras, build_stereo_rig, tracy_zone, world_matrix
 
 
 def _gpu_name():
@@ -57,7 +57,7 @@ def run(app, cfg, args, extension, headless):
     diagnostic_mode = getattr(args, "benchmark_mode", "full") if benchmark_mode else "full"
     tracy = bool(getattr(args, "profile_tracy", False))
     if benchmark_mode:
-        from benchmark import Benchmark
+        from rov_sim.benchmark import Benchmark
     seed = cfg["simulation"]["seed"]
     random.seed(seed)
     np.random.seed(seed)
@@ -94,7 +94,7 @@ def run(app, cfg, args, extension, headless):
         build_inspection_lighting(stage, cfg)
         build_stereo_rig(stage, cfg["stereo"])
         if getattr(args, "stereo_diagnostics", False):
-            from stereo_diagnostics import StereoDiagnostics
+            from rov_sim.diagnostics.stereo_diagnostics import StereoDiagnostics
             diagnostics = StereoDiagnostics(stage, cfg, directory)
         for side, path in CAMERA_PATHS.items():
             x, y, z = world_matrix(stage, path)[:3, 3]
@@ -106,7 +106,7 @@ def run(app, cfg, args, extension, headless):
         render_report = configure_rtx(cfg)
         water = UnderwaterEnvironment(stage, cfg)
         if getattr(args, "photometric_diagnostics", False):
-            from photometric_diagnostics import PhotometricCapture
+            from rov_sim.diagnostics.photometric_diagnostics import PhotometricCapture
             photometry = PhotometricCapture(stage, cfg, directory)
         render_report["water_material"] = water.material_path
         settings = carb.settings.get_settings()
@@ -123,7 +123,7 @@ def run(app, cfg, args, extension, headless):
         if camera_backend == "legacy":
             stereo = StereoCameras(stage, cfg, directory, headless=headless)
         else:
-            from sensors.rtx_stereo import RtxStereoCameras
+            from rov_sim.sensors.rtx_stereo import RtxStereoCameras
             stereo = RtxStereoCameras(stage, cfg, directory, headless=headless)
         render_report["camera_backend"] = camera_backend
         stereo.download_degraded_depth = diagnostics is not None or cfg["stereo"].get("readback_degraded_depth", False)

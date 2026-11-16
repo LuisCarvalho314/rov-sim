@@ -6,5 +6,12 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'runtime.ps1')
 $runtime = Resolve-IsaacPython $IsaacSimPath
-& $runtime (Join-Path $PSScriptRoot 'run.py') @RunArguments
-exit $LASTEXITCODE
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Push-Location -LiteralPath $repoRoot
+try {
+    & $runtime -m rov_sim @RunArguments
+    $code = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+exit $code

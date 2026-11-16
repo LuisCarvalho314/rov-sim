@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from config import find_oceansim_extension, load_config, resolve_path, validate_config
+from rov_sim.config import BACKENDS, ROOT, find_oceansim_extension, load_config, resolve_path, validate_config
 
 
 def parse_args(argv=None):
@@ -32,7 +32,7 @@ def parse_args(argv=None):
     parser.add_argument("--output-dir", help="Output root; each invocation creates a unique run directory")
     parser.add_argument("--oceansim-ext", help="Existing extension directory containing config/extension.toml")
     parser.add_argument("--backend", choices=["d3d12", "vulkan"])
-    parser.add_argument("--camera-backend", choices=["legacy", "camera-sensor", "tiled"],
+    parser.add_argument("--camera-backend", choices=BACKENDS,
                         help="Camera acquisition backend; defaults to stereo.backend or legacy")
     parser.add_argument("--readback-degraded-depth", action="store_true",
                         help="Also download degraded depth on RTX backends (readback parity experiment)")
@@ -65,13 +65,13 @@ def parse_args(argv=None):
 
 def supervise_benchmark(cfg, argv, *, tracy=False):
     """Keep a parent alive to report native Kit crashes during startup."""
-    from recording import create_run_directory, write_json
+    from rov_sim.recording import create_run_directory, write_json
 
     directory = create_run_directory(resolve_path(cfg["output"]["directory"]))
     write_json(directory / "config.json", cfg)
     write_json(directory / "status.json", {"state": "starting_kit", "completed_frames": {}})
     print(f"[Benchmark output] {directory}", flush=True)
-    command = [sys.executable, str(Path(__file__).resolve()), *argv,
+    command = [sys.executable, "-m", "rov_sim", *argv,
                "--_benchmark-child", "--_benchmark-run-dir", str(directory)]
     capture = capture_log = None
     try:
@@ -85,7 +85,7 @@ def supervise_benchmark(cfg, argv, *, tracy=False):
                                        stdout=capture_log, stderr=subprocess.STDOUT,
                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, encoding="utf-8", errors="replace")
+                                 text=True, encoding="utf-8", errors="replace", cwd=ROOT)
         with (directory / "kit_console.log").open("w", encoding="utf-8") as log:
             for line in child.stdout:
                 print(line, end="", flush=True)
@@ -155,7 +155,7 @@ def main(argv=None):
     if args.benchmark and not args._benchmark_child:
         return supervise_benchmark(cfg, list(sys.argv[1:] if argv is None else argv), tracy=args.profile_tracy)
     directory = find_oceansim_extension(cfg, args.oceansim_ext)
-    from startup import enable_oceansim, launch_options
+    from rov_sim.startup import enable_oceansim, launch_options
 
     headless = args.headless or args.mode == "headless"
     options = launch_options(cfg, headless, args.kit_arg, tracy=args.profile_tracy)
@@ -177,7 +177,7 @@ def main(argv=None):
             print("[Phase 1] SimulationApp and OceanSim startup succeeded.")
             return 0
         # Every import of carb, omni, pxr and OceanSim is below app startup.
-        from application import run
+        from rov_sim.application import run
 
         if args.profile_python:
             import cProfile
@@ -201,10 +201,3 @@ def main(argv=None):
         sys.argv = original_argv
         if app is not None:
             app.close()
-
-
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except KeyboardInterrupt:
-        print("Stopped by user.")

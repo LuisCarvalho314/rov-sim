@@ -3,11 +3,13 @@ import copy
 import json
 from pathlib import Path
 
+from rov_sim.config import ROOT
+
 
 def generate(root="outputs/photometric_6_1/profiles"):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    base = json.loads(Path("configs/tank_photometric_baseline.yaml").read_text())
+    base = json.loads((ROOT / "configs/tank_photometric_baseline.yaml").read_text())
     variants = {"baseline": copy.deepcopy(base)}
     for name in ("light4", "exposure4", "shadow_off", "water_depth10", "dlaa"):
         variants[name] = copy.deepcopy(base)

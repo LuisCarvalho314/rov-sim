@@ -5,7 +5,7 @@ import carb.settings
 import numpy as np
 from pxr import Usd, UsdGeom, UsdShade
 
-from recording import write_json, write_png
+from rov_sim.recording import write_json, write_png
 
 
 class PhotometricCapture:
@@ -42,7 +42,7 @@ class PhotometricCapture:
             "scope": "Original scene; no added geometry or emissive targets. Raw is RTX LDR before OceanSim."})
 
     def capture(self, stereo, pair, pass_name, index):
-        from stereo_diagnostics import reference
+        from rov_sim.diagnostics.stereo_diagnostics import reference
         refs = {side: reference(camera) for side, camera in stereo.cameras.items()}
         if refs["left"] != refs["right"]:
             raise RuntimeError("Unsynchronized photometric capture")

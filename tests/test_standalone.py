@@ -18,14 +18,12 @@ import zlib
 from pathlib import Path
 from unittest.mock import patch
 
-from config import ROOT, find_oceansim_extension, load_config, resolve_path, validate_config
-from experiments.change_detection import object_position, trajectory_pose
-from recording import PoseRecorder, create_run_directory, write_png
-from preview import ffmpeg_command, generate_previews
-import run
-import startup
-
-
+from rov_sim.config import ROOT, find_oceansim_extension, load_config, resolve_path, validate_config
+from rov_sim.experiments.change_detection import object_position, trajectory_pose
+from rov_sim.recording import PoseRecorder, create_run_directory, write_png
+from rov_sim.preview import ffmpeg_command, generate_previews
+import rov_sim.cli as run
+import rov_sim.startup as startup
 class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.cfg = load_config()
@@ -37,6 +35,8 @@ class ConfigurationTests(unittest.TestCase):
                 os.chdir(folder)
                 self.assertEqual(resolve_path("outputs"), ROOT / "outputs")
                 self.assertEqual(load_config(), self.cfg)
+                with patch.dict(os.environ, {"OCEANSIM_EXT_PATH": ""}):
+                    self.assertEqual(find_oceansim_extension(self.cfg), ROOT / "third_party/OceanSim")
             finally:
                 os.chdir(original)
 
@@ -105,7 +105,7 @@ class ConfigurationTests(unittest.TestCase):
             for ext in (pinned, installed):
                 (ext / 'config').mkdir(parents=True)
                 (ext / 'config/extension.toml').write_text('[package]\nversion="1.0.0"\n')
-            with patch('config.ROOT', root), patch.dict(os.environ, {'ISAAC_PATH': folder, 'OCEANSIM_EXT_PATH': ''}):
+            with patch('rov_sim.config.ROOT', root), patch.dict(os.environ, {'ISAAC_PATH': folder, 'OCEANSIM_EXT_PATH': ''}):
                 self.assertEqual(find_oceansim_extension(self.cfg), pinned)
                 self.assertEqual(find_oceansim_extension(self.cfg, str(installed)), installed)
                 (pinned / 'config/extension.toml').unlink()
@@ -113,9 +113,26 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class StartupTests(unittest.TestCase):
+    def test_fresh_process_imports_and_cpu_cli_do_not_load_runtime(self):
+        code = '''
+import sys
+import rov_sim
+from rov_sim import cli, config
+from rov_sim.experiments.change_detection import trajectory_pose
+try:
+    cli.main(["--help"])
+except SystemExit as error:
+    assert error.code == 0
+assert cli.main(["--validate-only"]) == 0
+for name in sys.modules:
+    assert not name.startswith(("rov_sim.application", "isaacsim", "omni", "pxr", "carb", "oceansim")), name
+'''
+        result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_help_and_validation_work_without_kit(self):
         for option in ("--help", "--validate-only"):
-            result = subprocess.run([sys.executable, str(ROOT / "run.py"), option], cwd=tempfile.gettempdir(), capture_output=True, text=True)
+            result = subprocess.run([sys.executable, "-m", "rov_sim", option], cwd=ROOT, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("omni.usd", sys.modules)
         self.assertNotIn("pxr", sys.modules)
@@ -159,6 +176,29 @@ class StartupTests(unittest.TestCase):
             self.assertEqual(json.loads((directory / "config.json").read_text(encoding="utf-8")), cfg)
             self.assertIn("--_benchmark-child", spawned.call_args.args[0])
             self.assertIn(str(directory), spawned.call_args.args[0])
+            self.assertEqual(spawned.call_args.args[0], [sys.executable, "-m", "rov_sim",
+                             "--benchmark", "--frames", "300", "--_benchmark-child",
+                             "--_benchmark-run-dir", str(directory)])
+            self.assertEqual(spawned.call_args.kwargs["cwd"], ROOT)
+
+    def test_benchmark_supervisor_rejects_launch_error_and_zero_exit_without_report(self):
+        for launch_error in (True, False):
+            with self.subTest(launch_error=launch_error), tempfile.TemporaryDirectory() as folder:
+                cfg = load_config()
+                cfg["output"]["directory"] = folder
+                child = types.SimpleNamespace(stdout=["startup incomplete\n"], wait=lambda: 0)
+                with patch.object(run.subprocess, "Popen", side_effect=OSError("cannot launch") if launch_error else None,
+                                  return_value=child):
+                    self.assertEqual(run.supervise_benchmark(cfg, ["--benchmark"]), 1)
+                directory = next(Path(folder).iterdir())
+                status = json.loads((directory / "status.json").read_text())
+                self.assertEqual(status["state"], "failed")
+                self.assertEqual(status["process_exit_code"], None if launch_error else 0)
+                self.assertTrue((directory / "config.json").is_file())
+                if launch_error:
+                    self.assertIn("cannot launch", status["error"])
+                else:
+                    self.assertEqual((directory / "kit_console.log").read_text(), "startup incomplete\n")
 
     def test_app_closes_if_extension_startup_fails_and_restores_argv(self):
         events = []
@@ -188,6 +228,135 @@ class StartupTests(unittest.TestCase):
         for args in (["--headless", "--frames", "0"], ["--experiment", "change_detection", "--frames", "0"]):
             with patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
                 run.parse_args(args)
+
+
+@unittest.skipUnless(os.name == "nt" and shutil.which("powershell"), "Windows PowerShell launcher checks")
+class PowerShellTests(unittest.TestCase):
+    @staticmethod
+    def quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+
+    def invoke(self, code, caller):
+        result = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code],
+                                cwd=caller, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout
+
+    def test_parser_and_both_runtime_layouts_do_not_change_location(self):
+        with tempfile.TemporaryDirectory(prefix="rov launcher ") as folder:
+            caller = Path(folder)
+            packaged, source = caller / "packaged runtime", caller / "source runtime"
+            for runtime in (packaged / "python.bat", source / "_build/windows-x86_64/release/python.bat"):
+                runtime.parent.mkdir(parents=True)
+                runtime.write_text("@exit /b 0\n")
+            self.invoke(f'''
+$ErrorActionPreference = 'Stop'
+$before = (Get-Location).Path
+. {self.quote(ROOT / 'scripts/runtime.ps1')}
+if ((Get-Location).Path -ne $before) {{ throw 'runtime helper changed location' }}
+foreach ($script in Get-ChildItem {self.quote(ROOT / 'scripts')} -Filter *.ps1) {{
+    $tokens = $null; $errors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) {{ throw ($errors | Out-String) }}
+}}
+if ((Resolve-IsaacPython {self.quote(packaged)}) -ne {self.quote(packaged / 'python.bat')}) {{ throw 'packaged layout' }}
+if ((Resolve-IsaacPython {self.quote(source)}) -ne {self.quote(source / '_build/windows-x86_64/release/python.bat')}) {{ throw 'source layout' }}
+''', caller)
+
+    def test_absolute_launcher_forwards_spaced_arguments_and_restores_location(self):
+        with tempfile.TemporaryDirectory(prefix="rov launcher ") as folder:
+            caller = Path(folder)
+            runtime = caller / "runtime with spaces"
+            runtime.mkdir()
+            (runtime / "python.bat").write_text(f'@"{sys.executable}" %*\n@exit /b %errorlevel%\n')
+            config = caller / "config with spaces.yaml"
+            config.write_text(json.dumps(load_config()))
+            for location in (ROOT, caller):
+                self.invoke(f'''
+$ErrorActionPreference = 'Stop'
+$before = (Get-Location).Path
+& {self.quote(ROOT / 'scripts/launch.ps1')} -IsaacSimPath {self.quote(runtime)} -RunArguments @('--validate-only','--config',{self.quote(config)},'--output-dir',{self.quote(caller / 'output with spaces')})
+if ($LASTEXITCODE -ne 0) {{ throw 'validation failed' }}
+if ((Get-Location).Path -ne $before) {{ throw 'caller directory lost' }}
+& {self.quote(ROOT / 'scripts/launch.ps1')} -IsaacSimPath {self.quote(runtime)} -RunArguments @('--help')
+if ($LASTEXITCODE -ne 0) {{ throw 'help failed' }}
+& {self.quote(ROOT / 'scripts/launch.ps1')} -IsaacSimPath {self.quote(runtime)} -RunArguments @('--validate-only','--config',{self.quote(caller / 'missing config.yaml')})
+if ($LASTEXITCODE -eq 0) {{ throw 'missing config accepted' }}
+if ((Get-Location).Path -ne $before) {{ throw 'failure lost caller directory' }}
+''', location)
+            self.assertFalse((caller / 'output with spaces').exists())
+
+    def test_capture_scripts_use_root_modules_and_retain_failure_checks(self):
+        with tempfile.TemporaryDirectory(prefix="rov capture launcher ") as folder:
+            caller = Path(folder)
+            runtime = caller / "runtime with spaces"
+            runtime.mkdir()
+            helper = caller / "fake runtime.py"
+            helper.write_text('''
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ['ROV_FIXTURE_LOG'], 'a') as out:
+    out.write(json.dumps({'cwd': str(pathlib.Path.cwd()), 'args': args}) + '\\n')
+assert args[:3] == ['-u', '-m', 'rov_sim'], args
+if '--startup-only' in args:
+    print('[Phase 1] SimulationApp and OceanSim startup succeeded.')
+else:
+    config = pathlib.Path(args[args.index('--config') + 1])
+    assert config.is_absolute() and config.is_file(), config
+    destination = pathlib.Path(args[args.index('--output-dir') + 1])
+    assert destination.is_absolute(), destination
+    run = destination / 'fixture_run'
+    run.mkdir(parents=True)
+    state = 'failed' if os.environ.get('ROV_FIXTURE_FAILURE') == 'status' else 'complete'
+    (run / 'status.json').write_text(json.dumps({'state': state, 'process_exit_code': 0}))
+    if '--benchmark' in args:
+        (run / 'benchmark.json').write_text('{}')
+failure = os.environ.get('ROV_FIXTURE_FAILURE')
+if failure == 'log': print('[Error] injected runtime error')
+sys.exit(7 if failure == 'exit' else 0)
+''')
+            (runtime / 'python.bat').write_text(f'@"{sys.executable}" "{helper}" %*\n@exit /b %errorlevel%\n')
+            for name, extra, expected in (
+                    ('run_photometric.ps1', "-Profiles @('baseline')", 1),
+                    ('validate_photometric.ps1', '-SkipBenchmarks', 4),
+                    ('validate_6_1.ps1', '-BenchmarkFrames 1 -Repeats 2 -SkipProfiling', 5)):
+                for failure in ('', 'exit', 'log', 'status'):
+                    with self.subTest(script=name, failure=failure):
+                        evidence = caller / (name + (failure or 'success'))
+                        if name == 'run_photometric.ps1':
+                            (evidence / 'profiles').mkdir(parents=True)
+                            (evidence / 'profiles/baseline.yaml').write_text(json.dumps(load_config()))
+                        args = extra + (f' -EvidenceRoot {self.quote(evidence)}' if name != 'validate_6_1.ps1' else '')
+                        log = caller / 'calls.jsonl'
+                        log.write_text('')
+                        # Redirect the timestamped output into the private fixture.
+                        redirect = f'''function Join-Path($Path, $ChildPath) {{
+    if ($ChildPath -like 'outputs/validation_6_1_*') {{ return {self.quote(evidence)} }}
+    Microsoft.PowerShell.Management\\Join-Path $Path $ChildPath
+}}''' if name == 'validate_6_1.ps1' else ''
+                        self.invoke(f'''
+$ErrorActionPreference = 'Stop'
+$env:ROV_FIXTURE_LOG = {self.quote(log)}
+$env:ROV_FIXTURE_FAILURE = {self.quote(failure)}
+function python {{
+    if ($args[0] -ne '-m' -or $args[1] -ne 'rov_sim.tools.validation.validate_recording') {{ throw 'validator module' }}
+    if ((Get-Location).Path -ne {self.quote(ROOT)}) {{ throw 'validator cwd' }}
+    $global:LASTEXITCODE = 0
+}}
+{redirect}
+$before = (Get-Location).Path
+$caught = $false
+try {{ & {self.quote(ROOT / 'scripts' / name)} -SimRoot {self.quote(runtime)} {args} }}
+catch {{ $caught = $true; Write-Output $_ }}
+if ($caught -ne ${str(bool(failure)).lower()}) {{ throw 'unexpected failure result' }}
+if ((Get-Location).Path -ne $before) {{ throw 'caller directory lost' }}
+''', caller)
+                        calls = [json.loads(line) for line in log.read_text().splitlines()]
+                        count = expected if not failure else (2 if failure == 'status' and name == 'validate_6_1.ps1' else 1)
+                        self.assertEqual(len(calls), count)
+                        for call in calls:
+                            self.assertEqual(Path(call['cwd']), ROOT)
+                            self.assertEqual(call['args'][:3], ['-u', '-m', 'rov_sim'])
 
 
 class RendererValidationTests(unittest.TestCase):
@@ -221,7 +390,7 @@ class RendererValidationTests(unittest.TestCase):
         pxr = types.ModuleType("pxr")
         pxr.UsdShade = object()
         with patch.dict(sys.modules, {"carb": carb, "carb.settings": carb.settings, "pxr": pxr}):
-            spec = importlib.util.spec_from_file_location("_underwater_validation_check", ROOT / "environments/underwater.py")
+            spec = importlib.util.spec_from_file_location("_underwater_validation_check", ROOT / "rov_sim/environments/underwater.py")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             report = module.configure_rtx(cfg)
@@ -346,7 +515,7 @@ class PreviewTests(unittest.TestCase):
         self.make_pass("before")
         self.make_pass("after")
         original = (self.root / "before/left/000000.png").read_bytes()
-        with patch("preview.subprocess.run", side_effect=self.fake_ffmpeg) as mock_run:
+        with patch("rov_sim.preview.subprocess.run", side_effect=self.fake_ffmpeg) as mock_run:
             result = generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "C:/Program Files/ffmpeg.exe"})
         self.assertEqual(mock_run.call_count, 3)
         self.assertEqual(set(result), {"before_stereo", "after_stereo", "comparison"})
@@ -360,31 +529,31 @@ class PreviewTests(unittest.TestCase):
         before = self.make_pass("before")
         self.make_pass("after")
         (before / "right/000001.png").unlink()
-        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "nonconsecutive|indices/counts"):
+        with patch("rov_sim.preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "nonconsecutive|indices/counts"):
             generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
         mock_run.assert_not_called()
         (before / "right/000001.png").write_bytes(b"original PNG")
         (self.root / "after/poses.jsonl").write_text(json.dumps({"frame": 0, "time_s": 1}) + "\n" +
                                                       json.dumps({"frame": 1, "time_s": 2}) + "\n")
-        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "timestamps differ"):
+        with patch("rov_sim.preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "timestamps differ"):
             generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
         mock_run.assert_not_called()
 
     def test_before_after_frame_counts_must_match(self):
         self.make_pass("before")
         self.make_pass("after", indices=(0,))
-        with patch("preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "Before/after PNG frame indices or counts differ"):
+        with patch("rov_sim.preview.subprocess.run") as mock_run, self.assertRaisesRegex(ValueError, "Before/after PNG frame indices or counts differ"):
             generate_previews(self.root, ("before", "after"), self.cfg | {"ffmpeg_executable": "ffmpeg"})
         mock_run.assert_not_called()
 
     def test_ffmpeg_failure_and_existing_video(self):
         before = self.make_pass("before")
-        with patch("preview.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "encoder unavailable")):
+        with patch("rov_sim.preview.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "encoder unavailable")):
             with self.assertRaisesRegex(RuntimeError, "encoder unavailable"):
                 generate_previews(self.root, ("before",), self.cfg | {"ffmpeg_executable": "ffmpeg"})
         self.assertEqual((before / "left/000000.png").read_bytes(), b"original PNG")
         (before / "stereo_preview.mp4").write_bytes(b"old video")
-        with patch("preview.subprocess.run") as mock_run, self.assertRaises(FileExistsError):
+        with patch("rov_sim.preview.subprocess.run") as mock_run, self.assertRaises(FileExistsError):
             generate_previews(self.root, ("before",), self.cfg | {"ffmpeg_executable": "ffmpeg"})
         mock_run.assert_not_called()
         self.assertEqual((before / "stereo_preview.mp4").read_bytes(), b"old video")
@@ -420,10 +589,10 @@ class CameraCleanupTests(unittest.TestCase):
     def adapter(cameras):
         fake_pxr = types.ModuleType("pxr")
         fake_pxr.Gf = fake_pxr.Usd = fake_pxr.UsdGeom = object()
-        robot = types.ModuleType("robots.bluerov")
+        robot = types.ModuleType("rov_sim.robots.bluerov")
         robot.VEHICLE_PATH = "/World/BlueROV"
-        with patch.dict(sys.modules, {"pxr": fake_pxr, "robots.bluerov": robot}):
-            spec = importlib.util.spec_from_file_location("_stereo_cleanup_check", ROOT / "sensors/stereo.py")
+        with patch.dict(sys.modules, {"pxr": fake_pxr, "rov_sim.robots.bluerov": robot}):
+            spec = importlib.util.spec_from_file_location("_stereo_cleanup_check", ROOT / "rov_sim/sensors/stereo.py")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
         adapter = module.StereoCameras.__new__(module.StereoCameras)

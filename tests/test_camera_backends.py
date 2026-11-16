@@ -1,14 +1,88 @@
 """CPU checks protecting selection and matched benchmark accounting."""
 import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tempfile
+import types
 import unittest
+from unittest.mock import patch
 
-from camera_backend_suite import BACKENDS, cases
-from compare_camera_backends import matched_configuration, summarize_reports
-from config import load_config, validate_config
-from run import main, parse_args
+from rov_sim.config import BACKENDS
+from rov_sim.tools.benchmarking.camera_backend_suite import cases
+from rov_sim.tools.benchmarking import camera_backend_suite as suite
+from rov_sim.config import ROOT
+from rov_sim.tools.benchmarking.compare_camera_backends import matched_configuration, summarize_reports
+from rov_sim.config import load_config, validate_config
+from rov_sim.cli import main, parse_args
 
 
 class CameraBackendTests(unittest.TestCase):
+    def test_suite_child_command_resume_and_failure_checks(self):
+        for state, log, succeeds in (("complete", "ok", True),
+                                     ("starting_kit", "ok", False),
+                                     ("complete", "[Error] extension failed", False),
+                                     ("complete", "Traceback (most recent call last)", False)):
+            with self.subTest(state=state, log=log), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                config = (ROOT / "configs/tank_photometric.yaml").resolve()
+                destination = root / "validation/legacy"
+
+                def child(command, **kwargs):
+                    self.assertEqual(command[:4], [sys.executable, "-u", "-m", "rov_sim"])
+                    self.assertEqual(kwargs["cwd"], ROOT)
+                    self.assertEqual(command[command.index("--config") + 1], str(config))
+                    self.assertEqual(command[command.index("--output-dir") + 1], str(destination))
+                    self.assertIn("--photometric-diagnostics", command)
+                    run = destination / "run"
+                    run.mkdir()
+                    (run / "status.json").write_text(json.dumps({"state": state}))
+                    kwargs["stdout"].write(log)
+                    return types.SimpleNamespace(returncode=0)
+
+                args = (root, "validation/legacy", "legacy", ["--record", "--photometric-diagnostics"], 60, config)
+                with patch.object(suite.subprocess, "run", side_effect=child) as spawned:
+                    if succeeds:
+                        suite.run_case(*args, False)
+                        before = {p: p.read_bytes() for p in destination.rglob('*') if p.is_file()}
+                        suite.run_case(*args, True)
+                        self.assertEqual(spawned.call_count, 1)
+                        for resume in (False, True):
+                            changed = list(args)
+                            changed[4] = 12
+                            with self.assertRaisesRegex(RuntimeError, "Existing or incomplete evidence"):
+                                suite.run_case(*changed, resume)
+                        self.assertEqual(before, {p: p.read_bytes() for p in before})
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            suite.run_case(*args, False)
+
+    def test_suite_provenance_uses_moved_sources_and_refuses_changed_or_old_roots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "new evidence"
+            argv = ["suite", "--root", str(root), "--only", "no-cases"]
+            with patch.object(sys, "argv", argv):
+                suite.main()
+            path = root / "provenance.json"
+            original = path.read_bytes()
+            provenance = json.loads(original)
+            self.assertEqual(provenance["configuration"], str(ROOT / "configs/tank_photometric.yaml"))
+            self.assertEqual(provenance["sources_sha256"], {
+                str(ROOT / p): hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
+                for p in ("rov_sim/application.py", "rov_sim/cli.py", "rov_sim/sensors/stereo.py", "rov_sim/sensors/rtx_stereo.py")})
+            with patch.object(sys, "argv", [*argv, "--resume"]):
+                suite.main()
+            self.assertEqual(path.read_bytes(), original)
+            for sources in ({str(ROOT / "run.py"): "old hash"},
+                            {**provenance["sources_sha256"], str(ROOT / "rov_sim/cli.py"): "changed"}):
+                stale = {**provenance, "sources_sha256": sources}
+                path.write_text(json.dumps(stale))
+                before = path.read_bytes()
+                with patch.object(sys, "argv", [*argv, "--resume"]), self.assertRaisesRegex(RuntimeError, "new evidence root"):
+                    suite.main()
+                self.assertEqual(path.read_bytes(), before)
+
     def test_legacy_default_and_explicit_selection_before_kit(self):
         self.assertIsNone(parse_args([]).camera_backend)
         self.assertEqual(load_config()["stereo"].get("backend", "legacy"), "legacy")

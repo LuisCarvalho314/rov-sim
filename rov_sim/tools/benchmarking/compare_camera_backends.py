@@ -9,7 +9,7 @@ import statistics
 
 import numpy as np
 
-from camera_backend_suite import BACKENDS
+from rov_sim.config import BACKENDS
 
 
 def read(path):
@@ -85,9 +85,9 @@ def wall_range_check(arrays, pose, calibration, side):
 
 
 def validate_captures(root, tiled_root=None):
-    from validate_photometry import verify_saved
-    from validate_recording import read_png
-    from evaluate_photometry import poses, luminance
+    from rov_sim.tools.validation.validate_photometry import verify_saved
+    from rov_sim.tools.validation.validate_recording import read_png
+    from rov_sim.tools.photometry.evaluate_photometry import poses, luminance
     runs = {b: completed_run((tiled_root if b == "tiled" and tiled_root else root) / "validation" / b) for b in BACKENDS}
     baseline_cfg = matched_configuration(read(runs["legacy"] / "config.json"))
     baseline_cal = read(runs["legacy"] / "stereo_calibration.json")
