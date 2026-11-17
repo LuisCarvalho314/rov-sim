@@ -34,6 +34,12 @@ Do not replace this checkout with a separately installed OceanSim copy.
   packages for simulation; do not install these tools over its runtime packages.
 - Optional MP4 previews need FFmpeg with `libx264` on PATH, or a configured
   `output.preview.ffmpeg_executable`.
+- Optional rosbag2 MCAP recording (`--record-mcap`) needs NVIDIA's native Windows
+  ROS 2 Jazzy workspace [`isaac-sim/IsaacSim-ros_workspaces`](https://github.com/isaac-sim/IsaacSim-ros_workspaces)
+  at tag `IsaacSim-6.1.0` (commit `a9e8471`), installed outside this repository with
+  `pixi install --locked` in `jazzy_ws` (no `pixi run build`). Point `ROV_SIM_PIXI_ENV`
+  at `<workspace>\jazzy_ws\.pixi\envs\default`. Nothing is installed into Isaac Sim;
+  see [MCAP recording](docs/REPRODUCIBILITY.md#mcap-recording-pixi-workspace-2026-11-17).
 
 ## Fresh checkout and asset setup
 
@@ -49,7 +55,7 @@ $env:ISAAC_SIM_PATH = 'D:/NVIDIA/isaacsim'
 $env:OCEANSIM_ASSET_PATH = 'D:/assets/OceanSim_assets'
 # Clear any old installed-extension override so the pinned checkout is selected.
 Remove-Item Env:OCEANSIM_EXT_PATH -ErrorAction SilentlyContinue
-. ./runtime.ps1
+. ./scripts/runtime.ps1
 $runtime = Resolve-IsaacPython $env:ISAAC_SIM_PATH
 ```
 
@@ -66,14 +72,24 @@ No extension copying or modification of the Isaac Sim installation is required.
 
 ```powershell
 # Activate the pinned OceanSim extension, then close.
-./launch.ps1 -RunArguments @('--headless','--startup-only')
+./scripts/launch.ps1 -RunArguments @('--headless','--startup-only')
 # Interactive tank and original legacy stereo backend.
-./launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml')
+./scripts/launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml')
 # Recommended experimental CameraSensor backend; two existing physical views.
-./launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor')
+./scripts/launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor')
 # Original 60-frame trajectory per pass and 0.5 m crate relocation.
-& $runtime -u run.py --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
+& $runtime -u -m rov_sim --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
+# The same passes as rosbag2 MCAP bags for rov_ws (camera-sensor only).
+$env:ROV_SIM_PIXI_ENV = 'C:/IsaacSim-ros_workspaces/jazzy_ws/.pixi/envs/default'
+./scripts/launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor','--headless','--experiment','change_detection','--frames','30','--record-mcap')
 ```
+
+`--record-mcap` writes one bag per pass with rosbag2's own `SequentialWriter`
+inside Kit's process; `--mcap-storage zstd` selects rosbag2's `zstd_fast` preset
+(default `none`, uncompressed). It requires `--camera-backend camera-sensor`, a
+bounded pass (`--frames` above 0, `--headless` or `--experiment`) and full readback,
+and is rejected with `--startup-only` and `--photometric-diagnostics`. It may be
+combined with `--record`, `--preview-mp4`, `--benchmark` and `--stereo-diagnostics`.
 
 `legacy` remains the default and fallback. `--camera-backend tiled` selects the
 experimental two-view TiledCameraSensor, including the required pose flush.
@@ -95,20 +111,20 @@ run until closed. The application owns time and rendering; timeline Play is unne
 ```powershell
 python -m pip install -r requirements-tools.txt
 python -m unittest discover -s tests -q
-& $runtime run.py --validate-only
+& $runtime -m rov_sim --validate-only
 # Known target, synchronization, radial range, disparity, PNG and pose checks.
-& $runtime -u run.py --headless --config configs/validation_6_1.yaml --camera-backend camera-sensor --experiment change_detection --frames 12 --record --stereo-diagnostics
+& $runtime -u -m rov_sim --headless --config configs/validation_6_1.yaml --camera-backend camera-sensor --experiment change_detection --frames 12 --record --stereo-diagnostics
 # Pass the actual unique run folder printed above:
-python validate_recording.py outputs/YOUR_RUN_FOLDER
+python -m rov_sim.tools.validation.validate_recording outputs/YOUR_RUN_FOLDER
 # Startup, legacy stationary/moving checks, three benchmarks and a separate profile.
-./validate_6_1.ps1
+./scripts/validate_6_1.ps1
 # Original trajectory, selected photometry, all three backends and matched benchmarks.
-& $runtime -u camera_backend_suite.py --root outputs/camera_reproduction
-python compare_camera_backends.py outputs/camera_reproduction
-python evaluate_photometry.py outputs/camera_reproduction/validation --profiles legacy camera-sensor tiled
-& $runtime -u verify_camera_scene.py outputs/camera_reproduction
+& $runtime -u -m rov_sim.tools.benchmarking.camera_backend_suite --root outputs/camera_reproduction
+python -m rov_sim.tools.benchmarking.compare_camera_backends outputs/camera_reproduction
+python -m rov_sim.tools.photometry.evaluate_photometry outputs/camera_reproduction/validation --profiles legacy camera-sensor tiled
+& $runtime -u -m rov_sim.tools.validation.verify_camera_scene outputs/camera_reproduction
 # Individual uninstrumented moving benchmark; keep diagnostics separate.
-& $runtime -u run.py --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --benchmark --frames 100
+& $runtime -u -m rov_sim --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --benchmark --frames 100
 ```
 
 Use fresh evidence roots; suites refuse to overwrite prior captures. Validate
@@ -164,7 +180,7 @@ Startup checks asset units/up axis, plausible model bounds, submerged camera ori
 
 `stereo_calibration.json` exports both K matrices, baseline, pinhole distortion values and `T_body_optical`. Matrices use column vectors: `p_parent = T_parent_child @ p_child`. Defaults give fx = fy ≈ 537.143 px, cx = 376 px, cy = 240 px. This describes virtual pinhole cameras; there is no lens/housing refraction or real underwater calibration model.
 
-OceanSim 1.0.0's `UW_param` docstring and implementation disagree about attenuation/backscatter slice ordering. The adapter supplies `UW_yaml_path` with **named fields**, preserving the installed version's actual defaults. Processed images use that version's `_uw_frame` buffer; this access and lifecycle handling are confined to `sensors/stereo.py`.
+OceanSim 1.0.0's `UW_param` docstring and implementation disagree about attenuation/backscatter slice ordering. The adapter supplies `UW_yaml_path` with **named fields**, preserving the installed version's actual defaults. Processed images use that version's `_uw_frame` buffer; this access and lifecycle handling are confined to `rov_sim/sensors/stereo.py`.
 
 ## Water and RTX caustics
 
@@ -198,7 +214,36 @@ before/stereo_preview.mp4     with --record --preview-mp4
 after/...                      second experiment pass
 after/stereo_preview.mp4      with --record --preview-mp4 in experiments
 comparison_preview.mp4        before/after left-camera comparison in experiments
+mcap/before/                  with --record-mcap, only after its check passed:
+  before_0.mcap, metadata.yaml  rosbag2 MCAP bag (seven topics) and rosbag2 metadata
+mcap/after/                   second experiment pass
+mcap/.staging/<pass>/         while writing, or after a failure; never consumed
 ```
+
+**MCAP bags.** Each frame the loop has checked as fresh is written as seven messages
+with one stamp, `2026-01-01T00:00:00Z + frame * 10^9 // fps` ns; log time, publish
+time and every header stamp are equal. Topics: `/stereo/{left,right}/image_raw`
+(raw RTX RGB before OceanSim's underwater processing, `bgr8`),
+`/stereo/{left,right}/camera_info` (from `stereo_calibration.json`, with cx/cy shifted
+by -0.5 to ROS pixel centres, D = 0, right P[0,3] = -fx * baseline),
+`/ground_truth/pose` (`map` to the left optical camera), `/tf` (the same transform) and
+`/tf_static` (left to right optical, +baseline along x; reliable, transient-local).
+`map` is the tank world frame, the same for both passes. After each pass the bag is
+closed, reopened with rosbag2's reader, checked against this contract and only then
+renamed from `mcap/.staging/<pass>/` to `mcap/<pass>/`, so a folder at
+`mcap/<pass>/` is always a checked bag. `status.json` records the Pixi environment
+under `mcap.environment` and each pass under `mcap.<pass>`:
+
+| `mcap.<pass>.state` | Meaning | Recovery |
+| --- | --- | --- |
+| `writing` | In progress; if the run died here (including a native crash), the pass is unusable | Delete `mcap/.staging/<pass>/` and re-run |
+| `failed` | Write error, crash or interrupt; `error` says why | Same |
+| `check_failed` | Closed, but the check found `problems` (first five); the bag stays in `.staging/` and the run fails | Keep for diagnosis; re-record |
+| `complete` | Closed, checked and renamed to `mcap/<pass>/`, with `message_counts`, `bag_bytes` and `bytes_per_frame` | Consumers may read it |
+
+Consumers read only `mcap/<pass>/`; nothing is repaired in place. Python's
+faulthandler may print `Windows fatal exception: access violation` for an exception
+that native code handles; the run's `status.json` state is authoritative.
 
 Stereo previews place left and right frames side by side. The default 752 × 480 source yields a 1504 × 480 MP4. The comparison preview places corresponding before and after **left-camera** frames side by side, also 1504 × 480 at the default resolution. FFmpeg runs after all PNGs and pose files have been written. Missing indices, mismatched pass timestamps and FFmpeg errors fail preview generation and are recorded in `status.json`; existing PNGs and metadata remain available. Existing MP4s are not overwritten.
 
@@ -216,32 +261,69 @@ Geometry, trajectory, phase and seed are deterministic. RTX photon sampling, den
 
 ## Architecture and extension points
 
+The repository-root `rov_sim/` package contains the application and domain code.
+`rov_sim/diagnostics/` holds in-process diagnostics; supporting module commands
+live under `rov_sim/tools/benchmarking/`, `rov_sim/tools/photometry/` and
+`rov_sim/tools/validation/`. PowerShell entry points and the shared runtime
+selector live in `scripts/`. Package initializers are inert; simulator imports
+remain delayed until `SimulationApp` has started and OceanSim is enabled.
+
+Run direct Python module commands from the repository root. Ordinary Python
+supports `python -m rov_sim --help`, `python -m rov_sim --validate-only`, tests,
+profile generation and offline analysis/validation with `requirements-tools.txt`.
+Use the selected Isaac bundled interpreter for simulation, camera-suite capture,
+renderer probes and the saved-scene verifiers (which load its USD libraries).
+No package installation is required, except the optional Pixi workspace for MCAP
+recording. With `--record-mcap`, `rov_sim/rosbag/deps.py` applies a minimal overlay
+inside Kit's process after `SimulationApp` starts: it appends the Pixi `Library\bin`
+to `PATH`, prepends `<env>\Library` to `AMENT_PREFIX_PATH` and appends the Pixi
+`site-packages` to the end of `sys.path`. `launch.ps1`, `python.bat` and the shell
+environment are untouched, and Kit's NumPy stays the one loaded (checked).
+
+Absolute PowerShell script paths work from other directories. Scripts resolve
+relative config/evidence arguments against the repository and restore the
+caller's directory on success or failure. Direct offline tools and suite data
+arguments remain caller-relative; simulator configuration/resource/output paths
+remain repository-relative. Shipped profiles and manifests always use the
+repository root. Runtime selection is resolved before the launcher changes
+directory.
+
+Use a fresh evidence root after this cleanup. Source paths and hashes in new
+camera-suite provenance differ; old roots intentionally cannot resume. Keep
+historical captures and manifests unchanged. The retained runtime report is
+[archived](docs/archive/RUNTIME_VALIDATION_2026-11-04.md); its recorded commands
+describe the original layout.
+
 | Module | Responsibility |
 | --- | --- |
-| `run.py`, `startup.py` | CLI, ordered app initialization, extension loading and final shutdown |
-| `config.py`, `configs/tank.yaml` | Parameters, paths and early validation |
-| `application.py` | One stage, rendering, pass sequencing and cleanup |
-| `scenes/tank.py`, `equipment.py`, `primitives.py` | Tank, original equipment/crates and USD helpers |
-| `robots/bluerov.py` | Asset reference, units/up-axis alignment and kinematic carrier |
-| `sensors/stereo.py` | Parallel cameras, calibration and `UW_Camera` adapter/cleanup |
-| `environments/underwater.py` | Surface, deformation and verified RTX controls |
-| `experiments/change_detection.py` | Crate displacement and repeatable trajectory |
-| `recording.py`, `preview.py` | Unique directories, metadata, poses, paired PNGs and post-capture MP4s |
+| `rov_sim/cli.py`, `rov_sim/startup.py` | CLI, ordered app initialization, extension loading and final shutdown |
+| `rov_sim/config.py`, `configs/tank.yaml` | Parameters, paths and early validation |
+| `rov_sim/application.py` | One stage, rendering, pass sequencing and cleanup |
+| `rov_sim/scenes/tank.py`, `rov_sim/scenes/equipment.py`, `rov_sim/scenes/primitives.py` | Tank, original equipment/crates and USD helpers |
+| `rov_sim/robots/bluerov.py` | Asset reference, units/up-axis alignment and kinematic carrier |
+| `rov_sim/sensors/stereo.py` | Parallel cameras, calibration and `UW_Camera` adapter/cleanup |
+| `rov_sim/environments/underwater.py` | Surface, deformation and verified RTX controls |
+| `rov_sim/experiments/change_detection.py` | Crate displacement and repeatable trajectory |
+| `rov_sim/recording.py`, `rov_sim/preview.py` | Unique directories, metadata, poses, paired PNGs and post-capture MP4s |
+| `rov_sim/rosbag/contract.py` | MCAP message contract: topics, QoS, stamps, CameraInfo, poses (standard library only) |
+| `rov_sim/rosbag/deps.py` | `--record-mcap` only: in-process Pixi overlay and checks on the loaded ROS 2 packages |
+| `rov_sim/rosbag/writer.py` | One rosbag2 MCAP bag per pass, its `status.json` state and the staging rename |
+| `rov_sim/rosbag/check.py` | Reopens a closed bag with rosbag2's reader and checks it against the contract |
 
-Add objects in `scenes/equipment.py` using `box`, `pipe` or USD references. Group meshes for each movable object under one Xform and change that parent between passes. Builders run once; do not add transform operations or recreate geometry in the render loop. Simple primitives/display colours preserve the original appearance; production inspection surfaces may need textures.
+Add objects in `rov_sim/scenes/equipment.py` using `box`, `pipe` or USD references. Group meshes for each movable object under one Xform and change that parent between passes. Builders run once; do not add transform operations or recreate geometry in the render loop. Simple primitives/display colours preserve the original appearance; production inspection surfaces may need textures.
 
-Add robots under `robots/` with a metre-based carrier and separate model alignment/sensor mount. Add scenes/sensors by wiring their creation into `application.run()` after startup, extending CLI choices as needed. Sensors need explicit initialization and cleanup using installed APIs. Add experiments as simple pass-setup/trajectory functions under `experiments/`, register a CLI choice and select their sequence in `application.py`; export new ground truth via `PoseRecorder`.
+Add robots under `rov_sim/robots/` with a metre-based carrier and separate model alignment/sensor mount. Add scenes/sensors by wiring their creation into `rov_sim.application.run()` after startup, extending CLI choices as needed. Sensors need explicit initialization and cleanup using installed APIs. Add experiments as simple pass-setup/trajectory functions under `rov_sim/experiments/`, register a CLI choice and select their sequence in `rov_sim/application.py`; export new ground truth via `PoseRecorder`.
 
-`rov_tank_builder.py` remains an unchanged legacy Script Editor template for comparison; the standalone app never imports it. Six reusable geometry/helper functions match the original Python AST exactly. No ROS 2 workspace is modified.
+`legacy/rov_tank_builder.py` remains an unchanged legacy Script Editor template for comparison; the standalone app never imports it. Six reusable geometry/helper functions match the original Python AST exactly. No ROS 2 workspace is modified; MCAP recording only loads NVIDIA's Pixi workspace.
 
 ## Checks and troubleshooting
 
 CPU checks using ordinary Python with NumPy, or the configured bundled Python:
 
 ```powershell
-& $python run.py --validate-only
-& $python -m unittest discover -s tests -v
-& $python -m compileall -q run.py config.py startup.py application.py recording.py scenes robots sensors environments experiments
+python -m rov_sim --validate-only
+python -m unittest discover -s tests -v
+python -m compileall -q rov_sim tests
 ```
 
 `--validate-only` validates configuration without importing Kit or requiring OceanSim; it does not test assets or GPU rendering. See [source/API evidence](docs/source_validation.json) and [Windows runtime checks](docs/VALIDATION.md).
@@ -259,6 +341,12 @@ CPU checks using ordinary Python with NumPy, or the configured bundled Python:
 | Plain viewport lacks underwater tint | Inspect OceanSim preview windows or recorded PNGs; attenuation is separate from the water material. |
 | No visible legacy caustics | Select `tank_legacy.yaml`; check graphics API/render mode, refractive MDL, `light:enableCaustics`, light placement and floor illumination. Compare caustics on/off runs. |
 | Background images differ | Match config, trajectory, seed, phase and warmup; evaluate residual photon/denoiser history separately. |
+| `MCAP recording bootstrap: ROV_SIM_PIXI_ENV is not set` | Install the pinned Pixi workspace and set `ROV_SIM_PIXI_ENV` to `<workspace>\jazzy_ws\.pixi\envs\default`. |
+| `MCAP recording bootstrap: the Pixi environment is incomplete` | The named DLL or `site-packages\rosbag2_py` is missing: rerun `pixi install --locked` at tag `IsaacSim-6.1.0`, at a short root (MAX_PATH). |
+| `MCAP recording bootstrap: NumPy changed` | A Pixi package shadowed Kit's NumPy. Do not put Pixi `site-packages` on `PYTHONPATH` or run Kit under `pixi run`. |
+| `MCAP recording bootstrap: rclpy is already loaded from outside the Pixi environment` | Isaac's ROS 2 bridge extension loaded its bundled `rclpy`; disable that extension for `--record-mcap` runs. |
+| `MCAP recording bootstrap: unexpected rosbag2_py version` or `failed to import` | The Pixi lock or Isaac Sim changed. Reinstall the pinned tag, then repeat the first-bag check in `docs/VALIDATION.md`. |
+| `MCAP bag check failed` | Read `status.json` `mcap.<pass>.problems`; the bag is kept under `mcap/.staging/<pass>/` for diagnosis. |
 
 Sources: [OceanSim UW_Camera](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/sensors/UW_Camera.py), [WaterSurface](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/watersurface/WaterSurface.py), [Isaac Sim 5.0 SimulationApp](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/py/source/extensions/isaacsim.simulation_app/docs/index.html). Installed sources take precedence over newer upstream APIs.
 # Benchmarking processed stereo throughput
@@ -266,7 +354,7 @@ Sources: [OceanSim UW_Camera](https://github.com/umfieldrobotics/OceanSim/blob/m
 Run a bounded benchmark with the normal RTX, OceanSim and stereo path:
 
 ```powershell
-.\launch.ps1 -RunArguments @('--scene', 'tank', '--headless', '--benchmark', '--frames', '300')
+.\scripts\launch.ps1 -RunArguments @('--scene', 'tank', '--headless', '--benchmark', '--frames', '300')
 ```
 
 The standard tank config does not record PNGs. Benchmark mode skips pose and image recording in that case and disables MP4 previews. Use `--record` to include PNG compression, disk writes and poses. Use `--record --preview-mp4` to time post-capture FFmpeg encoding. A custom config with `output.record_images=true` also records in benchmark mode. `--config` accepts alternative JSON-style YAML files.
@@ -280,10 +368,10 @@ Add `--profile-python` to a benchmark command to save `python_profile.pstats` be
 For a 100-frame RTX 2.0 stage comparison, use the same A profile for all three runs:
 
 ```powershell
-python benchmark_profiles.py
-.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','render-only')
-.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','no-readback')
-.\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','full')
+python -m rov_sim.tools.benchmarking.benchmark_profiles
+.\scripts\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','render-only')
+.\scripts\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','no-readback')
+.\scripts\launch.ps1 -RunArguments @('--headless','--benchmark','--frames','100','--config','outputs/A.yaml','--profile-tracy','--benchmark-mode','full')
 ```
 
 `--profile-tracy` enables the installed Kit Tracy extension and captures `capture.tracy` in each run directory. The CPU zones separate the blocking stereo render step, RGB/depth annotator fetch, OceanSim RGB and depth kernel submission, and CPU readback. View the trace with the Tracy viewer supplied by Isaac Sim. Add `--profile-warp-gpu` when numeric Warp CUDA kernel, copy and memset activity durations are needed; this explicitly synchronizes at the **end** of the measured run and adds profiling overhead. It is off by default. Tracy's RTX/DX12 GPU timeline is not included in Warp's CUDA totals.
@@ -293,11 +381,11 @@ Render-only counts blocking stereo render steps; no-readback submits both OceanS
 Generate comparable profiles and run each under the same machine and driver conditions:
 
 ```powershell
-python benchmark_profiles.py
-.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/A.yaml')
-.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/B.yaml')
-.\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/C.yaml')
-python compare_benchmarks.py --latest-profiles outputs
+python -m rov_sim.tools.benchmarking.benchmark_profiles
+.\scripts\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/A.yaml')
+.\scripts\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/B.yaml')
+.\scripts\launch.ps1 -RunArguments @('--scene','tank','--headless','--benchmark','--frames','300','--config','outputs/C.yaml')
+python -m rov_sim.tools.benchmarking.compare_benchmarks --latest-profiles outputs
 ```
 
 The A–C profiles use identical geometry, stereo calibration, trajectory, warmup, underwater processing and one RTX subframe. A uses RTX 2.0 with caustics off; B uses legacy RTX with caustics off; C uses legacy RTX with photon caustics on. All disable DLSS and PNG recording. Each command processes 300 stereo pairs. `benchmark.json` and the comparison output label the renderer. Do not commit measured results unless needed for a separate report.

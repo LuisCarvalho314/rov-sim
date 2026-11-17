@@ -4,6 +4,17 @@ Checked on 2026-11-04 in WSL against the existing Windows installation. The Wind
 
 ## Completed checks
 
+**2026-11-17, MCAP recording (`feature/isaac-mcap`).** With ordinary Python 3.13 and
+`requirements-tools.txt`: `python -m unittest discover -s tests -q` passed 112 tests
+(51 existing plus `test_rosbag_contract.py`, `test_rosbag_deps.py`, `test_rosbag_writer.py`,
+`test_rosbag_check.py` and new flag-rule, import and benchmark-report cases), and
+`python -m compileall -q rov_sim tests` passed. Every `--record-mcap` flag rule, pass state
+and bootstrap failure message has a CPU test; the writer and check run against a fake
+rosbag2 layer. The Windows runtime and WSL results are in
+[REPRODUCIBILITY.md](REPRODUCIBILITY.md#mcap-recording-pixi-workspace-2026-11-17).
+
+Commands in this section are historical transcripts from the original layout; use the [current README](../README.md) for module commands.
+
 - Inspected the 471-line tank builder, generated manifest and README before editing. Found and read the stereo preview at `C:\rov_sim\rov_stereo_preview.py` without changing that directory.
 - Located the active source-build runtime and extension. Inspected versions: Isaac Sim `5.0.0-rc.45+mr.0.1791e148.local`, OceanSim manifest `1.0.0`, Kit kernel `107.3.1+isaac.206797.8131b85d`.
 - Verified `SimulationApp` supports the launch options used. The installed Python experience enables Vulkan by default; the launcher supplies `/app/vulkan=false` before Windows device creation.
@@ -24,10 +35,10 @@ Checked on 2026-11-04 in WSL against the existing Windows installation. The Wind
 Set the PowerShell runtime/extension variables from the README, then run:
 
 ```powershell
-& $python run.py --startup-only
-& $python run.py --scene tank --mode interactive --frames 10
-& $python run.py --scene tank --headless --frames 10 --record
-& $python run.py --scene tank --experiment change_detection --headless --frames 5 --record
+& $runtime -m rov_sim --startup-only
+& $runtime -m rov_sim --scene tank --mode interactive --frames 10
+& $runtime -m rov_sim --scene tank --headless --frames 10 --record
+& $runtime -m rov_sim --scene tank --experiment change_detection --headless --frames 5 --record
 ```
 
 1. **Startup:** confirm Kit reports D3D12, loads the requested OceanSim directory without dependency errors and exits cleanly.
@@ -37,5 +48,27 @@ Set the PowerShell runtime/extension variables from the README, then run:
 5. **Physical caustics:** inspect rendering readback and logs, then compare caustics on/off runs with otherwise identical settings. Verify projected floor patterns respond to refractive waves. Assess DX12 and Vulkan separately if using both. Readback is never treated as proof of physical support.
 6. **Experiment:** check that both passes contain five pose records and matching left/right PNG indices. Camera poses/calibration must match across passes. Initial USD snapshots should differ only in crate parent translation. Image differences can also reflect the crate's lighting/visibility and residual temporal rendering history.
 7. **Lifecycle:** repeat a bounded run, close an unbounded GUI run and interrupt a capture with Ctrl+C. Check annotator/render-product cleanup, preservation of earlier outputs and `status.json` interruption reporting.
+
+### MCAP recording (`--record-mcap`)
+
+Set `ISAAC_SIM_PATH`, `OCEANSIM_ASSET_PATH` and `ROV_SIM_PIXI_ENV`, then run
+`./scripts/validate_mcap.ps1 -EvidenceRoot <new dir>`. It runs, and fails on the first
+unmet check: (1) the 30-frame first bag, (2) a change-detection run with
+`--stereo-diagnostics` (diagnostics `PASS`, both bags `complete`), (3) the bootstrap failure
+path with an empty `ROV_SIM_PIXI_ENV` (`status.json` `failed` with the bootstrap error and a
+traceback), and (4) 40-pair benchmarks with `--mcap-storage none` and `zstd`, printing
+pairs/s, `recording_ms` and bytes per frame.
+
+Then accept the first bag in WSL (`source /opt/ros/jazzy/setup.bash` and the `rov_ws`
+install):
+
+- `ros2 run rov_reconstruction bag_to_capture <run>/mcap/before <new output dir>` must exit 0
+  and extract 30 pairs;
+- from `rov_ws/src/rov_slam/scripts`, with that folder on `PYTHONPATH`,
+  `read_pose_topic('<bag>', '/ground_truth/pose')` from `rov_evaluation.inputs` must return
+  30 stamps and poses with frame `map` and no error (it returns `(stamps, poses, frame)`);
+- `rov_mapping` replay of Isaac bags is deferred: not tested by this change.
+
+Repeat both after any Isaac Sim or Pixi workspace update before bags are used.
 
 Offscreen OceanSim UI dependencies, model placement, Replicator readiness, DX12/CUDA interoperability, visible caustics and GPU resource release require runtime checks. There are no thrusters, hydrodynamics, lens housings or volumetric fluids. The authored scene clock is deterministic; bitwise/cross-backend RTX image repeatability is not guaranteed.

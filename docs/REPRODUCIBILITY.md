@@ -92,12 +92,74 @@ substantively from the historical protected source set, for external configurati
 The external `Bluerov/BROV_low.usd` used here is 43,692,335 bytes; SHA-256:
 `aeab5d5b7d4c55a61ef465d9c9f44cd191661ed0ff3f41ed5e350c9784bcc3f6`.
 
+### MCAP recording (Pixi workspace), 2026-11-17
+
+`--record-mcap` loads ROS 2's own bag writer from NVIDIA's native Windows ROS 2
+Jazzy workspace, installed outside the repository and outside Isaac Sim:
+
+```powershell
+winget install prefix-dev.pixi
+# A short root avoids the 260-character MAX_PATH limit inside .pixi\envs.
+git clone --branch IsaacSim-6.1.0 --recurse-submodules https://github.com/isaac-sim/IsaacSim-ros_workspaces.git C:\IsaacSim-ros_workspaces
+Set-Location C:\IsaacSim-ros_workspaces\jazzy_ws
+pixi install --locked          # no `pixi run build` is needed
+$env:ROV_SIM_PIXI_ENV = 'C:\IsaacSim-ros_workspaces\jazzy_ws\.pixi\envs\default'
+```
+
+Validated pin: tag `IsaacSim-6.1.0`, commit `a9e8471`, `jazzy_ws/pixi.lock` SHA-256
+`e9f8119e6ae92b9a0b1a83356dc2e331e46cac402628e122373e77206a425db0`, `rosbag2_py` 0.26.10,
+`rclpy` 7.1.11. Each recording run stores the environment path, package files and
+versions, Kit's NumPy and the lock hash under `status.json` `mcap.environment`
+(recorded, not enforced; only the `rosbag2_py` version is enforced). `ROV_SIM_PIXI_ENV`
+is read only by `--record-mcap` runs, inside Kit's process; it is trusted like
+`ISAAC_SIM_PATH`, because its DLLs and Python modules load into Kit.
+
+`scripts/validate_mcap.ps1` passed all four steps on the runtime above
+(evidence local under `outputs/validation_mcap_run3/`):
+
+| Check | Result |
+| --- | --- |
+| First bag, 30-frame change detection | Both passes `complete`; 7 topics × 30 messages; `kit.exe`; Kit NumPy 2.3.1; 2.17 MB per frame |
+| Stereo diagnostics with `--record-mcap` (12 frames) | Diagnostics `PASS`; both bags `complete` |
+| Bootstrap failure (empty `ROV_SIM_PIXI_ENV`) | `status.json` `failed` with the bootstrap message and a traceback; Kit's wrapper exited 0 |
+| Log time = publish time | All 210 MCAP Message records of the first bag (read directly from the file) |
+| WSL `bag_to_capture` | 30 pairs extracted, exit 0; fx 537.143, cx/cy 375.5/239.5 |
+| WSL `read_pose_topic(bag, '/ground_truth/pose')` | 30 poses, frame `map`, first stamp 1767225600000000000 |
+| Flag off against tag `baseline/isaac-mcap` | `--validate-only` return codes and messages identical for 7 configs × 6 flag sets; a 12-frame `--record` run has identical file layout, `poses.jsonl`, `status.json` (times removed), manifest and calibration |
+
+Recording cost, `--benchmark --frames 40` change detection (80 measured CameraSensor
+pairs, `configs/tank_photometric.yaml`), all three runs in one session:
+
+| Run | Pairs/s | `recording_ms` mean / p95 | Bytes per frame |
+| --- | --- | --- | --- |
+| Flag off (control) | 12.2654 | 0 / 0 | — |
+| `--record-mcap --mcap-storage none` | 11.2052 (−8.6 %) | 9.21 / 11.47 | 2,168,799 |
+| `--record-mcap --mcap-storage zstd` | 10.8578 (−11.5 %) | 13.87 / 16.28 | ≈1,029,000 |
+
+`recording_ms` covers the raw RGBA host copies, BGR conversion, serialization and
+writes; closing, checking and renaming the bag run after the measured frames. The
+earlier 12.8005 pairs/s row above is a 40-pair run from another session. `zstd` halves
+the disk use for about 4.7 ms more per frame; `none` stays the default until the author
+decides (design Goal 7). Python's faulthandler may print
+`Windows fatal exception: access violation` for exceptions that native code handles
+(also seen in flag-off runs and the overlay spike); the run's `status.json` is
+authoritative.
+
 ## Reproduce
 
 Follow the [README](../README.md) for fresh clone, submodule initialization,
 external assets, runtime selection, CameraSensor launch, validation and benchmarks.
 For a short check, use its geometric command and set `--frames 12` on the selected
 photometric change-detection command. For the full matched comparison use
-`camera_backend_suite.py`, followed by `compare_camera_backends.py` and
-`verify_camera_scene.py`. Those tools include frame freshness, stale-pose rejection,
+`rov_sim/tools/benchmarking/camera_backend_suite.py`, followed by `rov_sim/tools/benchmarking/compare_camera_backends.py` and
+`rov_sim/tools/validation/verify_camera_scene.py`. Those tools include frame freshness, stale-pose rejection,
 saved-buffer equations, scene preservation and the fork source-hash audit.
+
+For MCAP recording, set `ROV_SIM_PIXI_ENV` and run `./scripts/validate_mcap.ps1
+-EvidenceRoot <new dir>`, then the WSL first-bag steps in [VALIDATION.md](VALIDATION.md).
+
+Use fresh evidence roots after the repository cleanup; historical suite provenance
+intentionally cannot resume with the moved sources. The unchanged Script Editor
+reference is now `legacy/rov_tank_builder.py`, and the earlier runtime report is
+[archived](archive/RUNTIME_VALIDATION_2026-11-04.md). Recorded findings and source
+identities above remain historical evidence.

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 class RtxLifecycleTests(unittest.TestCase):
     def setUp(self):
-        stereo = types.ModuleType("sensors.stereo")
+        stereo = types.ModuleType("rov_sim.sensors.stereo")
         stereo.CAMERA_PATHS = {"left": "/Left", "right": "/Right"}
         stereo.StereoCameras = object
         stereo.tracy_zone = stereo.validate_geometry = stereo.world_matrix = MagicMock()
@@ -17,13 +17,13 @@ class RtxLifecycleTests(unittest.TestCase):
         self.wp.synchronize_stream = MagicMock()
         self.wp.get_stream = MagicMock(return_value="stream0")
         self.wp.synchronize = MagicMock()
-        modules = {"sensors.stereo": stereo, "warp": self.wp,
+        modules = {"rov_sim.sensors.stereo": stereo, "warp": self.wp,
                    "omni": types.ModuleType("omni"),
                    "omni.replicator": types.ModuleType("omni.replicator"),
                    "omni.replicator.core": types.ModuleType("omni.replicator.core"),
                    "pxr": types.SimpleNamespace(UsdGeom=MagicMock())}
         spec = importlib.util.spec_from_file_location("rtx_lifecycle_test_subject",
-                    Path(__file__).resolve().parents[1] / "sensors/rtx_stereo.py")
+                    Path(__file__).resolve().parents[1] / "rov_sim/sensors/rtx_stereo.py")
         module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, modules):
             spec.loader.exec_module(module)

@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from benchmark import Benchmark, percentile
-from benchmark_profiles import PROFILES, main as profiles_main
-from compare_benchmarks import latest_profile_reports, main as compare_main
-from config import load_config
-from run import main, parse_args
+from rov_sim.benchmark import Benchmark, percentile
+from rov_sim.tools.benchmarking.benchmark_profiles import PROFILES, main as profiles_main
+from rov_sim.tools.benchmarking.compare_benchmarks import latest_profile_reports, main as compare_main
+from rov_sim.config import load_config
+from rov_sim.cli import main, parse_args
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -45,6 +45,23 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertEqual(len(list(csv.DictReader(file))), 3)
             self.assertEqual(json.loads((Path(folder) / "benchmark.json").read_text())["summary"]["stereo_pairs"], 3)
             self.assertFalse(list(Path(folder).rglob("*.png")))
+
+    def test_mcap_key_only_when_recording_bags(self):
+        calibration = {"resolution_wh": [752, 480], "baseline_m": .38}
+        row = {"frame": 0, "pass": "before", "acquisition_total_ms": 40, "iteration_total_ms": 40,
+               "readiness_retries": 0}
+        for mcap in (None, {"storage": "none"}):
+            with self.subTest(mcap=mcap), tempfile.TemporaryDirectory() as folder:
+                options = {} if mcap is None else {"mcap": mcap}
+                benchmark = Benchmark(load_config(), recording=False, warmup=8, **options)
+                benchmark.add(row, start_ns=0, acquisition_end_ns=40_000_000, iteration_end_ns=40_000_000)
+                benchmark.write(folder, calibration=calibration, render_validation={})
+                report = json.loads((Path(folder) / "benchmark.json").read_text())
+                if mcap is None:
+                    self.assertNotIn("mcap", report)
+                else:
+                    self.assertEqual(report["mcap"], {"storage": "none"})
+                    self.assertEqual(list(report)[-1], "mcap")
 
     def test_percentiles(self):
         self.assertEqual(percentile([1, 2, 3, 4, 5], 90), 4.6)
