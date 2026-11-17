@@ -8,4 +8,3 @@ generated_tank/
 .env
 .env.*
 !.env.example
-.kit-venv/
