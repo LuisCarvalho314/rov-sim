@@ -2,7 +2,8 @@
 
 *   **Author:** L.Carvalho
 *   **Status:** Proposed. Revised 2026-11-17: the writer is `rosbag2_py.SequentialWriter`
-    in-process, chosen after measured evidence.
+    in-process, chosen after measured evidence. Revised again 2026-11-17 after the overlay
+    spike: the Pixi overlay is applied inside Kit's process, and `launch.ps1` is unchanged.
 *   **Date:** 2026-11-17
 *   **Sources:**
     *   [concepts brief](../../concepts_brief.md), the governing spec;
@@ -123,26 +124,25 @@ Three constraints shape the design:
     *   the deterministic outputs are byte-identical: CLI and config validation results,
         recorded poses, the output file layout, and `status.json` apart from times and
         durations;
-    *   `launch.ps1` changes no environment variable;
+    *   `scripts/launch.ps1` is unchanged, and no environment variable is changed;
     *   no `rosbag2_py`, Pixi or bag-writer module is imported;
     *   all existing tests and validation checks pass.
-4.  **Recording-only dependency overlay.**
-    *   `launch.ps1` appends the Pixi environment's `Library\bin` to `PATH` and prepends
-        `<env>\Library` to `AMENT_PREFIX_PATH`, process-local and only with the flag. `ROS_DISTRO` stays unset, so
-        Kit keeps its bundled ROS 2 libraries first.
-    *   A bootstrap module appends the Pixi `site-packages` to the **end** of `sys.path`. It
-        verifies that NumPy is still Kit's 2.3.1, the same module object, and that `rosbag2_py`
-        and `rclpy` resolve from the pinned Pixi environment.
+4.  **Recording-only dependency overlay, inside Kit's process.**
+    *   Only with the flag, a bootstrap module running inside Kit, after `SimulationApp` has
+        started, appends the Pixi environment's `Library\bin` to `os.environ["PATH"]`, prepends
+        `<env>\Library` to `os.environ["AMENT_PREFIX_PATH"]`, and appends the Pixi
+        `site-packages` to the **end** of `sys.path`. Nothing outside the process changes:
+        `launch.ps1`, `python.bat` and the shell environment are untouched.
+    *   It verifies that NumPy is still Kit's 2.3.1, the same module object, and that
+        `rosbag2_py` and `rclpy` resolve from the pinned Pixi environment.
     *   A mismatch aborts startup with a message that names what was expected and what was
         found.
     *   The bootstrap is separate from the writer.
-5.  **Launcher regression test.** A targeted regression test shows that, with the
-    recording overlay applied:
+5.  **Recording keeps Kit's behaviour.** With the overlay applied (`validate_mcap.ps1` steps 1
+    and 3):
     *   the interpreter still runs as `kit.exe`;
     *   rendering still produces fresh, valid stereo frames;
-    *   shutdown still returns the expected exit codes (success, failure, and the native crash
-        code that the benchmark supervisor reports);
-    *   with the flag off, the environment `python.bat` receives is identical to the baseline's.
+    *   a bootstrap failure is recorded as `failed` in `status.json`, with a console traceback.
 6.  **Pass states match the bag on disk.** `status.json` records each pass as `writing`,
     `failed`, `check_failed` or `complete`. A pass is `complete` only after the bag is closed,
     reopened and checked in `mcap/.staging/<pass>/`, and then renamed to `mcap/<pass>/`. Any
@@ -156,7 +156,7 @@ Three constraints shape the design:
     default from them; no threshold is set in advance.
 8.  **Docs match behaviour.** The rov-sim docs and the `rov_ws` `docs/isaac-mcap` branch describe
     the implemented command, output layout, the Pixi workspace install and pin, and the
-    recording overlay.
+    in-process overlay.
 
 ## Non-Goals
 
@@ -180,10 +180,6 @@ Three constraints shape the design:
 *   **Default MCAP storage preset:** uncompressed (rosbag2's default) is provisional until Goal 7
     reports. The author then picks the default, and removes `--mcap-storage` if one option is
     clearly better.
-*   **Overlay variant:** the minimal overlay (no `CONDA_PREFIX`, `AMENT_PREFIX_PATH` prepended)
-    has not been measured on its own. Either the first bag measures it, or the launcher sets
-    `CONDA_PREFIX` as in the research. Moving the whole overlay into `deps.py` is the alternative
-    to measure, and it would leave `launch.ps1` unchanged.
 *   **`rov_mapping` replay:** tested with the first bag, or recorded in the brief as deferred.
 
 ## Critical User Journeys (CUJs)
@@ -233,8 +229,8 @@ Three constraints shape the design:
 | How the writer runs | **Synchronous, in the loop** (author decision) | Errors surface on the frame that caused them. `recording_ms` covers the per-frame RGBA copy, serialization and `write` calls; `close()`, `check_pass` and the rename run after the frame loop, outside the benchmark rows. |
 | How a pass becomes complete | **In-process check after close, before the rename** (author decision) | No WSL step; only checked bags reach `mcap/<pass>/`. |
 | ROS 2 libraries | NVIDIA's Pixi workspace `IsaacSim-ros_workspaces`, tag `IsaacSim-6.1.0` (commit `a9e8471`), `pixi install --locked`; the SHA-256 of `jazzy_ws/pixi.lock` is recorded. `pixi run build` is not needed. | NVIDIA's supported native Windows ROS 2; outside git, pinned. |
-| Overlay | **Minimal, flag runs only:** `launch.ps1` appends `<env>\Library\bin` to `PATH` and prepends `<env>\Library` to `AMENT_PREFIX_PATH`; `ROS_DISTRO` stays unset; the bootstrap appends `<env>\Lib\site-packages` to the end of `sys.path` | Close to the variant measured in the research, which also set `CONDA_PREFIX` and set `AMENT_PREFIX_PATH` to the Pixi environment outright. This minimal form is first measured by the first bag (Open Questions). Full `pixi run` activation broke Kit. `site-packages` cannot go on `PYTHONPATH`, because that would put Pixi's NumPy 2.5.1 before Kit's. |
-| Pixi environment location | Environment variable `ROV_SIM_PIXI_ENV` (path to `jazzy_ws\.pixi\envs\default`); `launch.ps1 -PixiEnv` overrides it | The same pattern as `ISAAC_SIM_PATH`; no machine paths in tracked files. |
+| Overlay | **In-process, flag runs only:** after `SimulationApp` starts, `deps.py` appends `<env>\Library\bin` to `os.environ["PATH"]` (last, not first), prepends `<env>\Library` to `os.environ["AMENT_PREFIX_PATH"]`, and appends `<env>\Lib\site-packages` to the end of `sys.path`. `launch.ps1` is unchanged; no `CONDA_PREFIX`. | Measured in the overlay spike (below): it loads exactly the same DLLs as the launcher variant, and both `rov_ws` consumers accept its bag. Putting Pixi first on `PATH` is worse (Alternative M). Full `pixi run` activation broke Kit. `site-packages` cannot go on `PYTHONPATH`, because that would put Pixi's NumPy 2.5.1 before Kit's. |
+| Pixi environment location | Environment variable `ROV_SIM_PIXI_ENV` (path to `jazzy_ws\.pixi\envs\default`) | The same pattern as `ISAAC_SIM_PATH`; no machine paths in tracked files. |
 | Flag | `--record-mcap`, plus `--mcap-storage {none,zstd}` (default `none`) | CLI flags only, no config keys: a config key would change the `config.json` written to every run directory. `zstd` maps to rosbag2's `zstd_fast` preset. |
 | Backend rejection | In `cli.main`, after `--camera-backend` has been applied | The effective backend is known only after the override. |
 | Stamp epoch | `EPOCH_NS = 1_767_225_600 · 10⁹` (2026-01-01T00:00:00Z), the same for every pass | Non-zero; shows as a plausible date in tools. |
@@ -242,20 +238,49 @@ Three constraints shape the design:
 | QoS | All topics reliable, volatile, keep-last 10, except `/tf_static`: reliable, transient-local, keep-last 1 | Verified in WSL; `/tf_static` replays as latched. |
 | `.kit-venv`, `mcap`, `lz4`, `zstandard` | Removed: commit `c279b8f` (`requirements-kit.txt`, the `.kit-venv/` ignore entry) is reverted | No longer used. |
 
+### Overlay spike (2026-11-17)
+
+Run on the author's machine with NVIDIA's `python.bat`, `ROS_DISTRO` unset in the shell, inside
+a headless `SimulationApp`. Each variant wrote, read back and renamed a 3-frame seven-topic bag
+with the contract values. The evidence is local and not in git:
+`outputs/overlay_spike/SPIKE_RESULT.md`, with each variant's `result.json`.
+
+| Variant | Result |
+| --- | --- |
+| In-process (`os.environ` changed by the script; Pixi `Library\bin` last on `PATH`) | Works. `kit.exe`; Kit's NumPy 2.3.1, same object; 7 topics × 3 messages; 2.18 MB per frame. |
+| Launcher (the same two variables set in the shell before `python.bat`; no `CONDA_PREFIX`) | Works, and loads **exactly the same DLLs** as in-process. |
+| In-process, Pixi `Library\bin` **first** on `PATH` | Works, but Kit's core ROS libraries then load under Pixi's `rosbag2_cpp`. Rejected (Alternative M). |
+
+*   **DLLs loaded (in-process and launcher):** from Pixi, `rcutils`, `rcl`, `rmw`,
+    `rmw_implementation`, `rcpputils`, `class_loader`, `ament_index_cpp` and `rosbag2_*`. From
+    Kit's bundled `isaacsim.ros2.core\jazzy\lib`, only `rmw_zenoh_cpp`, `fastcdr-2.2` and the
+    `*_rosidl_typesupport_fastrtps_c` libraries.
+*   **Why in-process works:** `rosbag2_py/__init__.py` imports its extensions inside
+    `rpyutils.add_dll_directories_from_env('PATH')`, so `PATH` is read at import time.
+*   **`ROS_DISTRO` inside Kit is always `jazzy`.** NVIDIA's `setup_ros_env.bat`, called by
+    `python.bat`, sets it when the shell leaves it unset. In that case it also prepends the
+    bundled `lib` to `PATH`, appends the bundled prefix to `AMENT_PREFIX_PATH`, and sets
+    `RMW_IMPLEMENTATION=rmw_zenoh_cpp`. This is why `rmw_zenoh_cpp` comes from Kit.
+*   **QoS read-back:** `TopicMetadata.offered_qos_profiles` holds `rosbag2_py._storage.QoS`
+    objects with no getters. `rosbag2_py.convert_rclcpp_qos_to_rclpy_qos` turns one into an
+    `rclpy` profile; `/tf_static` read back as transient-local, reliable, depth 1. `QoS` is not
+    exported at the top level of `rosbag2_py`.
+*   **Rename:** renaming the bag folder with the reader open failed with `PermissionError`; after
+    `reader.close()` it succeeded.
+*   **WSL:** `bag_to_capture` extracted 3 pairs (exit 0), and
+    `read_pose_topic(bag, "/ground_truth/pose")` returned 3 poses in `map`.
+
 ### Components
 
 ```text
-scripts/launch.ps1
-  └─ only with --record-mcap:  PATH += <pixi env>\Library\bin ; AMENT_PREFIX_PATH = <pixi env>\Library;<previous>
-                               ROV_SIM_PIXI_ENV = <pixi env>          (all restored after the run)
-        v
-python.bat (NVIDIA, unchanged; ROS_DISTRO unset → bundled ROS 2 libs first) ──> kit.exe -m rov_sim ... --record-mcap
-        │
+scripts/launch.ps1 (unchanged) ──> python.bat (NVIDIA, unchanged; sets ROS_DISTRO=jazzy, bundled ROS 2 lib first)
+        │                              ──> kit.exe -m rov_sim ... --record-mcap
  rov_sim/cli.py        flag checks before Kit starts
-        v
+        │
  rov_sim/application.py  run()
    ├─ after SimulationApp start, before scene build:
-   │     rov_sim/rosbag/deps.py  load()   ── append <env>\Lib\site-packages LAST; import rosbag2_py, rclpy, msgs;
+   │     rov_sim/rosbag/deps.py  load()   ── PATH += <env>\Library\bin (last); AMENT_PREFIX_PATH = <env>\Library;<previous>;
+   │                                         append <env>\Lib\site-packages LAST; import rosbag2_py, rclpy, msgs;
    │                                         check numpy identity, package paths and versions, kit.exe image
    ├─ per pass:  rov_sim/rosbag/writer.py  PassBagWriter
    │     open:   SequentialWriter → <run>/mcap/.staging/<pass>/ (rosbag2 creates it)
@@ -265,7 +290,7 @@ python.bat (NVIDIA, unchanged; ROS_DISTRO unset → bundled ROS 2 libs first) �
    │     check:  rov_sim/rosbag/check.py  (SequentialReader over .staging/<pass>, contract.py rules)
    │     pass:   rename .staging/<pass> → mcap/<pass>
    └─ status.json "mcap": per pass  writing → complete | check_failed | failed
-        v
+        │
  bag_to_capture / rov_slam evaluation (rov_mapping: open question) read <run dir>/mcap/<pass>/ from /mnt/c/...
 ```
 
@@ -277,15 +302,20 @@ install fails before the scene is built.
 
 1.  **Find the environment.** It reads `ROV_SIM_PIXI_ENV`, and requires
     `<env>\Library\bin\rosbag2_storage_mcap.dll` and `<env>\Lib\site-packages\rosbag2_py`. On
-    failure it names the missing path and the fix: install the pinned workspace, set
-    `ROV_SIM_PIXI_ENV`, and run through `scripts/launch.ps1`. It also requires `<env>\Library\bin`
-    to be on `PATH` (compared with `os.path.normcase(os.path.normpath(...))`), which proves the launcher overlay was applied.
+    failure it names the missing path and the fix: install the pinned workspace and set
+    `ROV_SIM_PIXI_ENV`.
 2.  **Record NumPy, and refuse a second `rclpy`.** It records `numpy` (module object,
     `__version__`, `__file__`). It aborts if `rclpy` or `rosbag2_py` is already in `sys.modules`
     from a path outside `<env>`, for example because Isaac's ROS 2 bridge extension loaded its
     bundled `rclpy` into the same process. Two `rclpy` builds in one process are untested.
-3.  **Append `site-packages`.** It appends `<env>\Lib\site-packages` to the end of `sys.path`,
-    unless already present.
+3.  **Apply the overlay.** Each change is made once, unless already present (compared with
+    `os.path.normcase(os.path.normpath(...))`):
+    *   append `<env>\Library\bin` to the end of `os.environ["PATH"]` (never first; see the
+        overlay spike);
+    *   prepend `<env>\Library` to `os.environ["AMENT_PREFIX_PATH"]`;
+    *   append `<env>\Lib\site-packages` to the end of `sys.path`.
+
+    These changes stay in Kit's process for the rest of the run.
 4.  **Import.** It imports `rosbag2_py`, `rclpy.serialization`, and the message classes
     (`sensor_msgs.msg.Image`, `CameraInfo`, `geometry_msgs.msg.PoseStamped`,
     `TransformStamped`, `tf2_msgs.msg.TFMessage`, `builtin_interfaces.msg.Time`).
@@ -295,8 +325,8 @@ install fails before the scene is built.
     *   `importlib.metadata.version("rosbag2_py") == "0.26.10"`;
     *   the process image (`QueryFullProcessImageNameW` via `ctypes`) ends in `kit.exe`.
 6.  **Return.** It returns a small object holding `SequentialWriter`, `SequentialReader`,
-    `StorageOptions`, `ConverterOptions`, `TopicMetadata`, the rosbag2 `QoS` class,
-    `serialize_message`, `deserialize_message`, the message classes, and a report dict (paths,
+    `StorageOptions`, `ConverterOptions`, `TopicMetadata`, `rosbag2_py._storage.QoS`,
+    `convert_rclcpp_qos_to_rclpy_qos`, `serialize_message`, `deserialize_message`, the message classes, and a report dict (paths,
     versions, process image, the `pixi.lock` SHA-256 if `<env>\..\..\..\pixi.lock` exists). The
     report goes into `status.json` under `mcap.environment`.
 
@@ -454,30 +484,18 @@ flag is the CLI parsing and rejection rules, the `recording_ms` condition and `B
 
 ### Launcher (`scripts/launch.ps1`)
 
-New parameter: `-PixiEnv` (default `$env:ROV_SIM_PIXI_ENV`). If `$RunArguments` contains
-`--record-mcap`, the launcher:
-
-1.  requires `-PixiEnv` to name a directory containing `Library\bin\rosbag2_storage_mcap.dll`,
-    and otherwise throws with the install steps;
-2.  saves `$env:PATH`, `$env:AMENT_PREFIX_PATH` and `$env:ROV_SIM_PIXI_ENV`;
-3.  sets `PATH = <previous>;<env>\Library\bin`, `AMENT_PREFIX_PATH = <env>\Library` (plus the
-    previous value after `;` if non-empty), and `ROV_SIM_PIXI_ENV = <env>`;
-4.  requires `ROS_DISTRO` to be unset and throws otherwise, because `python.bat` would then skip
-    Kit's bundled ROS libraries, which is untested;
-5.  runs `python.bat` exactly as today, and restores the three variables in the existing
-    `finally`.
-
-The exit code is still `$LASTEXITCODE` from `python.bat`. The benchmark supervisor's child
-(`sys.executable` = `kit.exe`) inherits the variables. Without the flag, `launch.ps1` changes no
-environment variable and calls `python.bat` as at the baseline (Goal 3); its only difference is
-the unused `-PixiEnv` parameter. `runtime.ps1` and the validation and photometric scripts are
-unchanged.
+**Unchanged.** The overlay is applied inside Kit's process by `deps.py`, which the overlay spike
+showed loads the same DLLs as a launcher overlay. The user sets `ROV_SIM_PIXI_ENV` once, like
+`ISAAC_SIM_PATH`. The benchmark supervisor's child (`sys.executable` = `kit.exe`) runs
+`deps.load()` itself. `runtime.ps1` and the existing validation and photometric scripts are
+also unchanged. `ROS_DISTRO` needs no guard: inside Kit it is always `jazzy`, set by NVIDIA's
+`setup_ros_env.bat`.
 
 ## Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Mixed ROS builds in one process. With `ROS_DISTRO` unset, Kit's bundled `jazzy\lib` is first on `PATH`, so Pixi's `rosbag2_*` and `rclpy` binaries can load Kit's bundled `rcutils`, `rcl`, `rmw` and typesupport DLLs. Shown to work once, for one version pair (`rclcpp` 28.1.18 on both sides), on 3 synthetic frames. | A later Isaac Sim or Pixi build could fail to load, or load with mismatched libraries, without an import error. | The bootstrap records the `rosbag2_py` and `rclpy` file paths and the `rosbag2_py` version in `mcap.environment`. The first bag (Goal 1) is the first test in the real loop. After any Isaac Sim or Pixi update, Goal 1 is repeated before bags are used. |
+| Mixed ROS builds in one process. Measured in the overlay spike: the ROS core (`rcutils`, `rcl`, `rmw`, `rmw_implementation`, `rcpputils`, `class_loader`) and `rosbag2_*` load from Pixi, but `rmw_zenoh_cpp`, `fastcdr-2.2` and the fastrtps typesupport libraries load from Kit's bundled build (`RMW_IMPLEMENTATION=rmw_zenoh_cpp` is set by NVIDIA's `setup_ros_env.bat`). Shown to work for one version pair (`rclcpp` 28.1.18 on both sides), on 3 synthetic frames. | A later Isaac Sim or Pixi build could fail to load, or load with mismatched libraries, without an import error. | The bootstrap records the `rosbag2_py` and `rclpy` file paths and the `rosbag2_py` version in `mcap.environment`. The first bag (Goal 1) is the first test in the real loop. After any Isaac Sim or Pixi update, Goal 1 is repeated before bags are used. |
 | Update drift (Isaac Sim, Pixi, RoboStack). | The overlay or the `rosbag2_py` binding stops working. | `pixi install --locked` at a pinned tag; the bootstrap aborts unless `rosbag2_py` is 0.26.10; the lock SHA-256 is recorded. Fallback: route C, rebuilt from commit `c279b8f` (Alternative C). |
 | Python ABI. Pixi's `rosbag2_py` and `rclpy` are built for the lock's Python, which must match Kit's CPython 3.12 (research, Option 2 risks). | Import fails. | Checked after `pixi install`; an import failure aborts the bootstrap with the expected and found versions. |
 | Disk use. About 2.18 MB per frame uncompressed (research), so about 2.2 GB per 1,000 frames per pass. | A full disk fails the pass partway. | Write errors propagate and the pass becomes `failed`; partial data stays in `.staging/`. Goal 7 measures `zstd_fast`. There is no free-space check before the run. |
@@ -541,14 +559,15 @@ Sources: the brief's [Alternatives Weighed](../../concepts_brief.md#alternatives
     `SimulationApp` Isaac's torch failed with `WinError 1114` on `c10_cuda.dll`.
 *   **Reason for Rejection**: Breaks Kit. The minimal overlay is used instead.
 
-### E. Overlay with `ROS_DISTRO=jazzy` (Pixi ROS libraries first)
+### E. `ROS_DISTRO=jazzy` set in the shell before `python.bat`
 
 *   **Pros**: Matches NVIDIA's Pixi workflow, where Isaac uses the Pixi ROS libraries.
-*   **Cons**: Changes which ROS libraries Kit loads first for its own bridge extension; it passed
-    the same spike, but would add a second variant to validate.
-*   **Reason for Rejection**: It would change which ROS libraries Kit loads first for its own
-    bridge extension, and that order needs its own validation. With `ROS_DISTRO` unset, Kit keeps
-    the library order of every validated run, and the launcher refuses a set `ROS_DISTRO`.
+*   **Cons**: With `ROS_DISTRO` already set, NVIDIA's `setup_ros_env.bat` no longer adds Kit's
+    bundled ROS libraries to `PATH` or `AMENT_PREFIX_PATH`, which changes Kit's own environment.
+    Inside Kit, `ROS_DISTRO` is `jazzy` either way. The research's in-process bags passed with
+    and without it, but only the unset variant's bag was run through `bag_to_capture`.
+*   **Reason for Rejection**: It changes Kit's environment for no measured gain. The design does
+    not set `ROS_DISTRO` and needs no guard against it.
 
 ### F. Pixi `site-packages` on `PYTHONPATH`
 
@@ -602,6 +621,24 @@ Sources: the brief's [Alternatives Weighed](../../concepts_brief.md#alternatives
 *   **Reason for Rejection**: Rebasing would put the passes in different `map` frames, and
     fx = 376 is wrong for Isaac and is not caught by consumer checks (brief, "Drop" table).
 
+### L. Overlay applied by `launch.ps1`
+
+*   **Pros**: The environment is set before Kit starts, and can be inspected from the shell.
+*   **Cons**: It adds a launcher parameter, a PowerShell parse of `--record-mcap` that repeats
+    `cli.py`, saving and restoring three variables, a `ROS_DISTRO` guard and PowerShell tests.
+    `python.bat -m rov_sim --record-mcap` run directly would always fail.
+*   **Reason for Rejection**: The overlay spike showed that it loads exactly the same DLLs as the
+    in-process overlay, and its bag is accepted the same way. It adds code for no difference.
+
+### M. Pixi `Library\bin` first on `PATH`
+
+*   **Pros**: Intended to make Pixi's ROS libraries win every DLL lookup.
+*   **Cons**: Measured in the overlay spike, it does the opposite for the ROS core. Kit's bundled
+    `rcutils`, `rcl`, `rmw` and `class_loader` load under Pixi's `rosbag2_cpp`, and only
+    `rmw_zenoh_cpp` and `fastcdr` come from Pixi.
+*   **Reason for Rejection**: It mixes the builds at the riskier boundary, with Pixi's
+    `rosbag2_cpp` on Kit's core. Appending keeps the ROS core and rosbag2 from one build.
+
 --------------------------------------------------------------------------------
 
 ## Detailed Implementation Plan
@@ -620,9 +657,8 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
     CPU tests.
 4.  **Flags, loop integration and benchmark keyword:** `cli.py`, `application.py` and
     `benchmark.py`, with the `tests/test_standalone.py` and `tests/test_benchmark.py` additions.
-5.  **Launcher overlay:** `scripts/launch.ps1` and its PowerShell tests.
-6.  **Runtime validation:** `scripts/validate_mcap.ps1`. Run it, then the WSL acceptance steps.
-7.  **Docs:** rov-sim docs, then the `rov_ws` README on its docs branch, then the planning
+5.  **Runtime validation:** `scripts/validate_mcap.ps1`. Run it, then the WSL acceptance steps.
+6.  **Docs:** rov-sim docs, then the `rov_ws` README on its docs branch, then the planning
     documents.
 
 ### Target Files to Create/Modify
@@ -692,8 +728,8 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
         `check_failed` with the first five problems and writes `status.json`.
     *   `abort(error)` does nothing once the state is `complete` or `check_failed`.
     *   Storage `none` maps to preset `""` and `zstd` to `"zstd_fast"`. Topics are created with
-        `QoS(10).keep_last(10).reliable().durability_volatile()`, and `/tf_static` with
-        `QoS(1).keep_last(1).reliable().transient_local()`.
+        `deps.QoS(10).keep_last(10).reliable().durability_volatile()`, and `/tf_static` with
+        `deps.QoS(1).keep_last(1).reliable().transient_local()`.
     *   The `poses` argument is the existing loop's `poses` dict; the writer uses
         `poses["T_world_optical"]["left"]`. It imports nothing from ROS: everything comes from
         `deps`.
@@ -709,7 +745,9 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
 *   **Proposed Changes**: `check_pass(staging_dir, deps, calibration, completed_frames, fps) ->
     list[str]`, with exactly the checks in the Technical Plan's "Completeness check". It opens
     the bag with `deps.SequentialReader`. It takes topic types and the offered QoS of
-    `/tf_static` from `get_all_topics_and_types()` (`TopicMetadata.offered_qos_profiles`), and
+    `/tf_static` from `get_all_topics_and_types()` (`TopicMetadata.offered_qos_profiles`,
+    converted with `deps.convert_rclcpp_qos_to_rclpy_qos`, then `durability ==
+    TRANSIENT_LOCAL`), and
     reads messages with `read_next()`. It closes the reader in a `finally` before returning, so
     that the rename that follows can succeed on Windows. It returns problems; it never raises
     for a content problem, only for I/O errors.
@@ -767,26 +805,21 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
     adds `"mcap": self.mcap` to the report only when it isn't `None`, so reports without the flag
     are unchanged.
 
-#### 11. `scripts/launch.ps1` (Modify)
+#### 11. `scripts/launch.ps1` (No change)
 
 *   **Type / Scope**: PowerShell launcher.
-*   **Proposed Changes**: Add `[Parameter()][string]$PixiEnv = $env:ROV_SIM_PIXI_ENV` as the
-    **last** `param` entry, so existing positional calls bind as before. Apply the overlay steps
-    from the Technical Plan's "Launcher" only when `$RunArguments -contains '--record-mcap'`:
-    check `ROS_DISTRO` and the DLL first, then save and set the variables inside the existing
-    `try`, and restore them in its `finally`. A variable that was unset is restored as unset.
-    Error messages name the missing file and the install commands, or the `ROS_DISTRO` value
-    found.
+*   **Proposed Changes**: None. The overlay lives in `deps.py` (overlay spike; Alternative L).
+    The existing launcher tests must pass unchanged.
 
 #### 12. `scripts/validate_mcap.ps1` (Create)
 
 *   **Type / Scope**: Windows runtime validation (needs Isaac Sim, OceanSim assets and the Pixi
     environment). Parameters: `-SimRoot` (default `$env:ISAAC_SIM_PATH`), `-PixiEnv` (default
     `$env:ROV_SIM_PIXI_ENV`) and `-EvidenceRoot`, which must not already exist.
-*   **Proposed Changes**: The script calls `launch.ps1`, not `python.bat` directly, because only
-    the launcher applies the overlay. Each run is
-    `launch.ps1 -IsaacSimPath $SimRoot -PixiEnv $PixiEnv -RunArguments @(... '--output-dir',
-    <evidence>\<name>)`, with its console sent to `<evidence>\<name>.log`. As in
+*   **Proposed Changes**: Like `validate_6_1.ps1`, the script resolves `$runtime` with
+    `runtime.ps1` and runs `& $runtime -u -m rov_sim @RunArguments --output-dir
+    <evidence>\<name> *> <evidence>\<name>.log`. It sets `$env:ROV_SIM_PIXI_ENV = $PixiEnv` for
+    the runs and restores the previous value (or unset) in a `finally`. As in
     `validate_6_1.ps1`, every run must have exactly one run directory, and its console must have
     no `[Error]`, `Traceback (most recent call last)` or `Fatal Python error` line. The script
     fails on the first unmet check:
@@ -799,9 +832,8 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
         --camera-backend camera-sensor --experiment change_detection --frames 12
         --stereo-diagnostics --record-mcap`. It requires `<run>/diagnostics/summary.json`
         `status == "PASS"` and both bag passes in state `complete` (Goal 2).
-    3.  **Failure path:** the first-bag arguments, with `-PixiEnv` pointing at a scratch
-        directory that contains only an empty `Library\bin\rosbag2_storage_mcap.dll`, so the
-        launcher check passes and the bootstrap fails inside Kit. It requires `status.json`
+    3.  **Failure path:** the first-bag arguments, with `ROV_SIM_PIXI_ENV` pointing at an empty
+        scratch directory, so the bootstrap fails inside Kit at step 1. It requires `status.json`
         `state == "failed"` with the bootstrap error recorded, and a `Traceback` in the console.
         The console scan above is skipped for this run. The exit code is recorded but not
         required to be non-zero, because Kit's Windows wrapper can return zero after a failure
@@ -812,10 +844,6 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
         `process_exit_code == 0` and `benchmark.json`. It prints pairs/s, mean and p95
         `recording_ms`, and `mcap.<pass>.bytes_per_frame` from `status.json`. The author picks
         the default storage from these numbers (Goal 7).
-
-    The launcher environment, with and without the flag, is covered by the item 16 launcher
-    test, which runs on CPU. This script does not repeat it.
-
 #### 13. `tests/test_rosbag_contract.py` (Create)
 
 *   **Type / Scope**: CPU unit tests (ordinary Python, NumPy from `requirements-tools.txt`).
@@ -864,12 +892,15 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
 *   **Proposed Changes**: With a temporary fake Pixi directory and patched `os.environ` and
     `sys.modules`:
     *   a missing `ROV_SIM_PIXI_ENV`, a missing DLL, a missing `site-packages\rosbag2_py`,
-        `Library\bin` absent from `PATH`, a pre-loaded foreign `rclpy` or `rosbag2_py`,
+        a pre-loaded foreign `rclpy` or `rosbag2_py`,
         `rosbag2_py` or `rclpy` resolving outside `<env>`, a `rosbag2_py` version other than
         0.26.10, and a process image other than `kit.exe` each raise with item 5's
         expected-versus-found message (the process-image lookup is an injectable function);
     *   the NumPy identity check fails when a different module object is substituted;
-    *   `sys.path` gains `site-packages` only at the end, and only once.
+    *   `sys.path` gains `site-packages` only at the end, and only once;
+    *   `os.environ["PATH"]` gains `<env>\Library\bin` only at the end, and
+        `AMENT_PREFIX_PATH` gains `<env>\Library` only at the front, each once, including when
+        the entry is already present with different case or a trailing separator.
 
 #### 16. `tests/test_standalone.py` (Modify)
 
@@ -881,16 +912,7 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
     *   New `test_record_mcap_flag_rules`, covering each row of the "Flag rules" table through
         `cli.parse_args` and `cli.main([... "--validate-only"])`, including the backend rule via
         `--camera-backend legacy`.
-    *   In the PowerShell launcher class, new
-        `test_launcher_applies_pixi_overlay_only_with_record_mcap`. A fake `python.bat` (the
-        existing fixture pattern) writes its `PATH`, `AMENT_PREFIX_PATH`, `ROV_SIM_PIXI_ENV` and
-        `ROS_DISTRO` to a file. It asserts:
-        *   the appended `Library\bin` and the variables appear only with `--record-mcap`;
-        *   the caller's values are restored afterwards;
-        *   a set `ROS_DISTRO` or a missing DLL makes the launcher fail before running
-            `python.bat`;
-        *   the fake's exit code (0, a failure code 3, and the native crash code `-1073741819`)
-            is propagated with the overlay applied.
+    *   The existing PowerShell launcher tests pass unchanged (`launch.ps1` is not modified).
     *   Confirm the existing script-scan test (`test_standalone.py:245-264`) still passes with
         the new `validate_mcap.ps1`.
 
@@ -915,7 +937,7 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
         to "except the optional Pixi workspace for MCAP recording", and add the four
         `rov_sim/rosbag/*` modules to the module table.
     *   **"Checks and troubleshooting":** add rows for the bootstrap errors (environment not set,
-        overlay missing, NumPy changed, foreign `rclpy`).
+        Pixi environment incomplete, NumPy changed, foreign `rclpy`).
 
 #### 19. `docs/REPRODUCIBILITY.md` (Modify)
 
@@ -939,9 +961,10 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
         acceptance steps (`source /opt/ros/jazzy/setup.bash`):
         *   `ros2 run rov_reconstruction bag_to_capture <run>/mcap/before <new output dir>`,
             which must exit 0 and extract 30 pairs;
-        *   `python3 -c "from rov_evaluation.inputs import read_pose_topic;
-            read_pose_topic('<bag>')"` from `rov_ws/src/rov_slam/scripts`, which must return 30
-            poses without error;
+        *   from `rov_ws/src/rov_slam/scripts`, with that folder on `PYTHONPATH`,
+            `read_pose_topic('<bag>', '/ground_truth/pose')` from `rov_evaluation.inputs`, which
+            must return 30 stamps and poses with frame `map` and no error (it returns
+            `(stamps, poses, frame)`);
         *   the decision on `rov_mapping` replay, or its recorded deferral.
 
 #### 21. `rov_ws: src/rov_dataset_player/README.md` (Modify, branch `docs/isaac-mcap`)
@@ -961,7 +984,7 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
 *   **Type / Scope**: Planning record.
 *   **Proposed Changes**:
     *   Add a "Route change (2026-11-17)" decision: in-process `rosbag2_py.SequentialWriter`
-        through the Pixi overlay replaces route C, which becomes the fallback. Link the research
+        with an in-process Pixi overlay replaces route C, which becomes the fallback. Link the research
         report. Mark the `.kit-venv` launcher decision and work items 1, 3, 4 and 6 as amended
         by this design. Work item 5 keeps its benchmark, with storage `none`/`zstd`.
     *   It is copied back from the worktree to `C:\rov-sim`, where the original lives.
