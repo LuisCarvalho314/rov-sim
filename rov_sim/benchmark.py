@@ -34,7 +34,7 @@ def distribution(values):
 
 
 class Benchmark:
-    def __init__(self, cfg, *, recording, warmup, gpu=None, versions=None, mode="full", tracy=False):
+    def __init__(self, cfg, *, recording, warmup, gpu=None, versions=None, mode="full", tracy=False, mcap=None):
         self.cfg = cfg
         self.recording = recording
         self.warmup = warmup
@@ -42,6 +42,7 @@ class Benchmark:
         self.versions = versions or {}
         self.mode = mode
         self.tracy = tracy
+        self.mcap = mcap
         self.rows = []
         self.first_start_ns = None
         self.last_acquisition_end_ns = None
@@ -138,5 +139,7 @@ class Benchmark:
                       "render_ms measures blocking rep.orchestrator.step() wall time, including its wait_for_render behavior and retries; it is not a pure GPU kernel time.",
                       "Frame latency and end-to-end throughput differ; simulation timestamps and GUI FPS are not execution throughput.",
                   ]}
+        if self.mcap is not None:
+            report["mcap"] = self.mcap
         write_json(directory / "benchmark.json", report)
         return report

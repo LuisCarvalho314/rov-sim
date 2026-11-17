@@ -39,6 +39,10 @@ def parse_args(argv=None):
     parser.add_argument("--kit-arg", action="append", default=[], help="Extra Kit option, e.g. --kit-arg=--/renderer/activeGpu=0")
     parser.add_argument("--validate-only", action="store_true", help="Validate config without importing Isaac Sim")
     parser.add_argument("--startup-only", action="store_true", help="Start Kit, enable OceanSim, then close")
+    parser.add_argument("--record-mcap", action="store_true",
+                        help="Write one rosbag2 MCAP bag per pass (camera-sensor only; needs ROV_SIM_PIXI_ENV)")
+    parser.add_argument("--mcap-storage", choices=("none", "zstd"),
+                        help="MCAP storage preset for --record-mcap: none (default) or zstd (rosbag2 zstd_fast)")
     parser.add_argument("--_benchmark-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_benchmark-run-dir", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -60,6 +64,19 @@ def parse_args(argv=None):
         parser.error("Run --stereo-diagnostics separately from --benchmark; raw GT downloads change timing")
     if args.photometric_diagnostics and (args.benchmark or args.stereo_diagnostics):
         parser.error("Photometric diagnostics require a separate target-free, unbenchmarked run")
+    if args.mcap_storage is not None and not args.record_mcap:
+        parser.error("--mcap-storage requires --record-mcap")
+    if args.record_mcap:
+        headless = args.headless or args.mode == "headless"
+        if args.frames == 0 or (args.frames is None and not args.experiment and not headless):
+            parser.error("--record-mcap needs a bounded pass; set --frames above 0, --headless or --experiment")
+        if args.startup_only:
+            parser.error("--record-mcap requires a capture run, not --startup-only")
+        if args.benchmark_mode != "full":
+            parser.error("--record-mcap requires --benchmark-mode full; other modes skip readback")
+        if args.photometric_diagnostics:
+            parser.error("Run --photometric-diagnostics separately from --record-mcap")
+        args.mcap_storage = args.mcap_storage or "none"
     return args
 
 
@@ -149,6 +166,13 @@ def main(argv=None):
     if args.benchmark_mode != "full" and (cfg["output"]["record_images"] or cfg["output"]["preview"]["enabled"]):
         raise ValueError("Diagnostic benchmark modes require PNG and MP4 recording disabled")
     validate_config(cfg)
+    if args.record_mcap:
+        backend = cfg["stereo"].get("backend", "legacy")
+        if backend != "camera-sensor":
+            raise ValueError(f"--record-mcap requires the camera-sensor backend; effective backend is {backend}")
+        fps = cfg["simulation"]["fps"]
+        if isinstance(fps, bool) or float(fps) != int(fps):
+            raise ValueError(f"--record-mcap requires a whole-number simulation.fps; found {fps}")
     if args.validate_only:
         print(f"Configuration valid: {resolve_path(args.config)}")
         return 0

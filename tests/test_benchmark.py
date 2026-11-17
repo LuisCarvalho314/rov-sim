@@ -46,6 +46,23 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(json.loads((Path(folder) / "benchmark.json").read_text())["summary"]["stereo_pairs"], 3)
             self.assertFalse(list(Path(folder).rglob("*.png")))
 
+    def test_mcap_key_only_when_recording_bags(self):
+        calibration = {"resolution_wh": [752, 480], "baseline_m": .38}
+        row = {"frame": 0, "pass": "before", "acquisition_total_ms": 40, "iteration_total_ms": 40,
+               "readiness_retries": 0}
+        for mcap in (None, {"storage": "none"}):
+            with self.subTest(mcap=mcap), tempfile.TemporaryDirectory() as folder:
+                options = {} if mcap is None else {"mcap": mcap}
+                benchmark = Benchmark(load_config(), recording=False, warmup=8, **options)
+                benchmark.add(row, start_ns=0, acquisition_end_ns=40_000_000, iteration_end_ns=40_000_000)
+                benchmark.write(folder, calibration=calibration, render_validation={})
+                report = json.loads((Path(folder) / "benchmark.json").read_text())
+                if mcap is None:
+                    self.assertNotIn("mcap", report)
+                else:
+                    self.assertEqual(report["mcap"], {"storage": "none"})
+                    self.assertEqual(list(report)[-1], "mcap")
+
     def test_percentiles(self):
         self.assertEqual(percentile([1, 2, 3, 4, 5], 90), 4.6)
         self.assertIsNone(percentile([], 95))

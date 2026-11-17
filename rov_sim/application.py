@@ -1,6 +1,7 @@
 """Standalone lifecycle after SimulationApp has initialized Kit."""
 from __future__ import annotations
 
+import hashlib
 import random
 import os
 import time
@@ -14,7 +15,7 @@ import omni.replicator.core as rep
 import omni.timeline
 import omni.usd
 
-from rov_sim.config import resolve_path
+from rov_sim.config import ROOT, resolve_path
 from rov_sim.environments.underwater import UnderwaterEnvironment, configure_rtx
 from rov_sim.experiments.change_detection import object_position, prepare_pass, trajectory_pose
 from rov_sim.recording import PoseRecorder, create_run_directory, write_json
@@ -52,10 +53,40 @@ def _memory_snapshot():
     return result
 
 
+def _git_commit():
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                timeout=10, check=False)
+        return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+
+
+def _start_mcap(cfg, args, directory, status):
+    """--record-mcap only: load rosbag2 from the Pixi environment and record it in status.json."""
+    from rov_sim.rosbag import contract
+    from rov_sim.rosbag.check import check_pass
+    from rov_sim.rosbag.deps import load
+    from rov_sim.rosbag.writer import PassBagWriter
+
+    deps = load()
+    fps = int(cfg["simulation"]["fps"])
+    commit = _git_commit()
+    config_sha256 = hashlib.sha256((directory / "config.json").read_bytes()).hexdigest()
+    backend = cfg["stereo"].get("backend", "legacy")
+    status["mcap"] = {"environment": deps.report, "epoch_ns": contract.EPOCH_NS, "fps": fps,
+                      "storage": args.mcap_storage}
+    write_json(directory / "status.json", status)
+    print(f"[MCAP] rosbag2_py {deps.report['rosbag2_py_version']} from {deps.report['pixi_env']}", flush=True)
+    return {"deps": deps, "fps": fps, "PassBagWriter": PassBagWriter, "check_pass": check_pass,
+            "custom_data": lambda pass_name: contract.custom_data(commit, config_sha256, backend, pass_name, fps)}
+
+
 def run(app, cfg, args, extension, headless):
     benchmark_mode = getattr(args, "benchmark", False)
     diagnostic_mode = getattr(args, "benchmark_mode", "full") if benchmark_mode else "full"
     tracy = bool(getattr(args, "profile_tracy", False))
+    record_mcap = bool(getattr(args, "record_mcap", False))
     if benchmark_mode:
         from rov_sim.benchmark import Benchmark
     seed = cfg["simulation"]["seed"]
@@ -74,6 +105,8 @@ def run(app, cfg, args, extension, headless):
     write_json(directory / "status.json", status)
     print(f"[Output] {directory}")
     water = stereo = recorder = benchmark = diagnostics = photometry = None
+    writer = rosbag = None
+    mcap_check_failed = []
     drain_ms = 0.0
     warp_gpu_timing = None
     hydra_stats = None
@@ -81,6 +114,9 @@ def run(app, cfg, args, extension, headless):
     collecting_gpu = False
     memory_samples = []
     try:
+        if record_mcap:
+            # Before the scene is built, so a broken Pixi install fails fast and is recorded.
+            rosbag = _start_mcap(cfg, args, directory, status)
         context = omni.usd.get_context()
         # SimulationApp normally creates an empty stage. Reuse it rather than
         # opening another stage and invalidating extension/sensor state.
@@ -132,6 +168,7 @@ def run(app, cfg, args, extension, headless):
             benchmark = Benchmark(cfg, recording=cfg["output"]["record_images"],
                                   warmup=cfg["simulation"]["warmup_frames"], gpu=_gpu_name(),
                                   mode=diagnostic_mode, tracy=tracy,
+                                  mcap={"storage": args.mcap_storage} if record_mcap else None,
                                   versions={"isaac_sim": (Path(os.environ["ISAAC_PATH"]) / "VERSION").read_text().strip(),
                                             "oceansim": extension["extension_id"]})
         write_json(directory / "stereo_calibration.json", calibration)
@@ -216,6 +253,9 @@ def run(app, cfg, args, extension, headless):
                     stereo.render_pair()
             if not benchmark_mode or cfg["output"]["record_images"]:
                 recorder = PoseRecorder(directory / pass_name, images=cfg["output"]["record_images"])
+            if record_mcap:
+                writer = rosbag["PassBagWriter"](directory, pass_name, rosbag["deps"], calibration, rosbag["fps"],
+                                                 args.mcap_storage, status, rosbag["custom_data"](pass_name))
             index = 0
             if benchmark_mode:
                 memory_samples.append({"pass": pass_name, "phase": "after_warmup", **_memory_snapshot()})
@@ -284,6 +324,9 @@ def run(app, cfg, args, extension, headless):
                         raise RuntimeError(f"{side} camera no longer follows the vehicle with fixed calibration")
                 if recorder is not None:
                     recorder.record(index, time_s, pair, poses)
+                if writer is not None:
+                    # Raw RTX RGBA host copy; the borrowed buffer is reused by the next render_step().
+                    writer.write_frame(index, {side: stereo.inputs[side][0].numpy() for side in CAMERA_PATHS}, poses)
                 iteration_end_ns = time.perf_counter_ns() if benchmark_mode else None
                 if benchmark_mode:
                     row = {"frame": index, "pass": pass_name, "simulation_time_s": time_s,
@@ -291,7 +334,7 @@ def run(app, cfg, args, extension, headless):
                            "render_ms": render_ns / 1e6, **timings,
                            "underwater_processing_ms": timings["underwater_processing_ms"] if camera_backend != "legacy" or tracy or diagnostic_mode == "no-readback" else None,
                            "gpu_readback_ms": timings["gpu_readback_ms"] if (camera_backend != "legacy" or tracy) and diagnostic_mode == "full" else None,
-                           "recording_ms": (iteration_end_ns - acquisition_end_ns) / 1e6 if recorder else 0.0,
+                           "recording_ms": (iteration_end_ns - acquisition_end_ns) / 1e6 if recorder or writer else 0.0,
                            "acquisition_total_ms": (acquisition_end_ns - start_ns) / 1e6,
                            "iteration_total_ms": (iteration_end_ns - start_ns) / 1e6,
                            "readiness_retries": retries}
@@ -304,6 +347,17 @@ def run(app, cfg, args, extension, headless):
             if recorder is not None:
                 recorder.close()
             recorder = None
+            if writer is not None:
+                writer.close()
+                problems = rosbag["check_pass"](writer.staging, rosbag["deps"], calibration, index, rosbag["fps"])
+                if problems:
+                    writer.mark_check_failed(problems)
+                    mcap_check_failed.append(pass_name)
+                    print(f"[MCAP] {pass_name}: check failed: {problems[0]}", flush=True)
+                else:
+                    writer.commit()
+                    print(f"[MCAP] {pass_name}: {writer.final}", flush=True)
+                writer = None
             if getattr(args, "profile_warp_gpu", False):
                 collecting_gpu = False
                 drain_start_ns = time.perf_counter_ns()
@@ -380,6 +434,9 @@ def run(app, cfg, args, extension, headless):
         status["state"] = "complete"
         if diagnostics is not None:
             diagnostics.finish()
+        if mcap_check_failed:
+            raise RuntimeError(f"MCAP bag check failed for pass(es) {', '.join(mcap_check_failed)}; "
+                               "see status.json mcap.<pass>.problems")
         write_json(directory / "status.json", status)
         print(f"[Done] {directory}")
     except BaseException as error:
@@ -388,6 +445,8 @@ def run(app, cfg, args, extension, headless):
         if status["preview"]["state"] == "encoding":
             status["preview"]["state"] = "failed"
             status["preview"]["error"] = status["error"]
+        if writer is not None:
+            writer.abort(error)
         write_json(directory / "status.json", status)
         raise
     finally:

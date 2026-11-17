@@ -124,8 +124,12 @@ try:
 except SystemExit as error:
     assert error.code == 0
 assert cli.main(["--validate-only"]) == 0
+assert cli.main(["--validate-only", "--record-mcap", "--headless", "--camera-backend", "camera-sensor"]) == 0
+assert cli.main(["--validate-only", "--record-mcap", "--experiment", "change_detection",
+                 "--camera-backend", "camera-sensor", "--mcap-storage", "zstd"]) == 0
 for name in sys.modules:
-    assert not name.startswith(("rov_sim.application", "isaacsim", "omni", "pxr", "carb", "oceansim")), name
+    assert not name.startswith(("rov_sim.application", "isaacsim", "omni", "pxr", "carb", "oceansim",
+                                "rov_sim.rosbag", "rosbag2_py", "rclpy")), name
 '''
         result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -223,6 +227,56 @@ for name in sys.modules:
                 run.main(["--startup-only"])
         self.assertEqual(events, ["start", "close"])
         self.assertIs(sys.argv, original)
+
+    def test_record_mcap_flag_rules(self):
+        base = ["--record-mcap", "--headless", "--camera-backend", "camera-sensor"]
+        rejected_by_parser = (
+            ["--record-mcap", "--camera-backend", "camera-sensor"],  # interactive default of 0 frames
+            [*base, "--frames", "0"],
+            ["--record-mcap", "--experiment", "change_detection", "--frames", "0"],
+            [*base, "--startup-only"],
+            [*base, "--benchmark", "--benchmark-mode", "render-only"],
+            [*base, "--benchmark", "--benchmark-mode", "no-readback"],
+            [*base, "--photometric-diagnostics"],
+            ["--headless", "--mcap-storage", "zstd"],
+            [*base, "--mcap-storage", "lz4"],
+        )
+        for args in rejected_by_parser:
+            with self.subTest(args=args), patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+                run.parse_args(args)
+        for backend in ("legacy", "tiled"):
+            with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, f"effective backend is {backend}"):
+                run.main(["--record-mcap", "--headless", "--camera-backend", backend, "--validate-only"])
+        # The default configuration's backend is not camera-sensor; the rule uses the effective backend.
+        with self.assertRaisesRegex(ValueError, "requires the camera-sensor backend"):
+            run.main(["--record-mcap", "--headless", "--validate-only"])
+        allowed = (
+            [*base, "--frames", "30"],
+            ["--record-mcap", "--experiment", "change_detection", "--camera-backend", "camera-sensor"],
+            [*base, "--benchmark", "--frames", "40"],
+            [*base, "--experiment", "change_detection", "--stereo-diagnostics"],
+            [*base, "--record", "--preview-mp4"],
+            [*base, "--mcap-storage", "zstd"],
+        )
+        with patch("sys.stdout", new=io.StringIO()):
+            for args in allowed:
+                with self.subTest(args=args):
+                    self.assertEqual(run.main([*args, "--validate-only"]), 0)
+        self.assertEqual(run.parse_args(base).mcap_storage, "none")
+        self.assertIsNone(run.parse_args(["--headless"]).mcap_storage)
+        self.assertFalse(run.parse_args(["--headless"]).record_mcap)
+
+    def test_record_mcap_rejects_fractional_fps(self):
+        with tempfile.TemporaryDirectory(prefix="rov fps ") as folder:
+            cfg = load_config()
+            cfg["simulation"]["fps"] = 29.97
+            config = Path(folder) / "fractional.yaml"
+            config.write_text(json.dumps(cfg))
+            with patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(run.main(["--config", str(config), "--headless", "--validate-only"]), 0)
+            with self.assertRaisesRegex(ValueError, "whole-number simulation.fps"):
+                run.main(["--config", str(config), "--record-mcap", "--headless", "--camera-backend",
+                          "camera-sensor", "--validate-only"])
 
     def test_headless_and_experiment_cannot_run_unbounded(self):
         for args in (["--headless", "--frames", "0"], ["--experiment", "change_detection", "--frames", "0"]):
