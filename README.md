@@ -34,6 +34,12 @@ Do not replace this checkout with a separately installed OceanSim copy.
   packages for simulation; do not install these tools over its runtime packages.
 - Optional MP4 previews need FFmpeg with `libx264` on PATH, or a configured
   `output.preview.ffmpeg_executable`.
+- Optional rosbag2 MCAP recording (`--record-mcap`) needs NVIDIA's native Windows
+  ROS 2 Jazzy workspace [`isaac-sim/IsaacSim-ros_workspaces`](https://github.com/isaac-sim/IsaacSim-ros_workspaces)
+  at tag `IsaacSim-6.1.0` (commit `a9e8471`), installed outside this repository with
+  `pixi install --locked` in `jazzy_ws` (no `pixi run build`). Point `ROV_SIM_PIXI_ENV`
+  at `<workspace>\jazzy_ws\.pixi\envs\default`. Nothing is installed into Isaac Sim;
+  see [MCAP recording](docs/REPRODUCIBILITY.md#mcap-recording-pixi-workspace-2026-11-17).
 
 ## Fresh checkout and asset setup
 
@@ -73,7 +79,17 @@ No extension copying or modification of the Isaac Sim installation is required.
 ./scripts/launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor')
 # Original 60-frame trajectory per pass and 0.5 m crate relocation.
 & $runtime -u -m rov_sim --headless --config configs/tank_photometric.yaml --camera-backend camera-sensor --experiment change_detection --frames 60 --record
+# The same passes as rosbag2 MCAP bags for rov_ws (camera-sensor only).
+$env:ROV_SIM_PIXI_ENV = 'C:/IsaacSim-ros_workspaces/jazzy_ws/.pixi/envs/default'
+./scripts/launch.ps1 -RunArguments @('--config','configs/tank_photometric.yaml','--camera-backend','camera-sensor','--headless','--experiment','change_detection','--frames','30','--record-mcap')
 ```
+
+`--record-mcap` writes one bag per pass with rosbag2's own `SequentialWriter`
+inside Kit's process; `--mcap-storage zstd` selects rosbag2's `zstd_fast` preset
+(default `none`, uncompressed). It requires `--camera-backend camera-sensor`, a
+bounded pass (`--frames` above 0, `--headless` or `--experiment`) and full readback,
+and is rejected with `--startup-only` and `--photometric-diagnostics`. It may be
+combined with `--record`, `--preview-mp4`, `--benchmark` and `--stereo-diagnostics`.
 
 `legacy` remains the default and fallback. `--camera-backend tiled` selects the
 experimental two-view TiledCameraSensor, including the required pose flush.
@@ -198,7 +214,36 @@ before/stereo_preview.mp4     with --record --preview-mp4
 after/...                      second experiment pass
 after/stereo_preview.mp4      with --record --preview-mp4 in experiments
 comparison_preview.mp4        before/after left-camera comparison in experiments
+mcap/before/                  with --record-mcap, only after its check passed:
+  before_0.mcap, metadata.yaml  rosbag2 MCAP bag (seven topics) and rosbag2 metadata
+mcap/after/                   second experiment pass
+mcap/.staging/<pass>/         while writing, or after a failure; never consumed
 ```
+
+**MCAP bags.** Each frame the loop has checked as fresh is written as seven messages
+with one stamp, `2026-01-01T00:00:00Z + frame * 10^9 // fps` ns; log time, publish
+time and every header stamp are equal. Topics: `/stereo/{left,right}/image_raw`
+(raw RTX RGB before OceanSim's underwater processing, `bgr8`),
+`/stereo/{left,right}/camera_info` (from `stereo_calibration.json`, with cx/cy shifted
+by -0.5 to ROS pixel centres, D = 0, right P[0,3] = -fx * baseline),
+`/ground_truth/pose` (`map` to the left optical camera), `/tf` (the same transform) and
+`/tf_static` (left to right optical, +baseline along x; reliable, transient-local).
+`map` is the tank world frame, the same for both passes. After each pass the bag is
+closed, reopened with rosbag2's reader, checked against this contract and only then
+renamed from `mcap/.staging/<pass>/` to `mcap/<pass>/`, so a folder at
+`mcap/<pass>/` is always a checked bag. `status.json` records the Pixi environment
+under `mcap.environment` and each pass under `mcap.<pass>`:
+
+| `mcap.<pass>.state` | Meaning | Recovery |
+| --- | --- | --- |
+| `writing` | In progress; if the run died here (including a native crash), the pass is unusable | Delete `mcap/.staging/<pass>/` and re-run |
+| `failed` | Write error, crash or interrupt; `error` says why | Same |
+| `check_failed` | Closed, but the check found `problems` (first five); the bag stays in `.staging/` and the run fails | Keep for diagnosis; re-record |
+| `complete` | Closed, checked and renamed to `mcap/<pass>/`, with `message_counts`, `bag_bytes` and `bytes_per_frame` | Consumers may read it |
+
+Consumers read only `mcap/<pass>/`; nothing is repaired in place. Python's
+faulthandler may print `Windows fatal exception: access violation` for an exception
+that native code handles; the run's `status.json` state is authoritative.
 
 Stereo previews place left and right frames side by side. The default 752 × 480 source yields a 1504 × 480 MP4. The comparison preview places corresponding before and after **left-camera** frames side by side, also 1504 × 480 at the default resolution. FFmpeg runs after all PNGs and pose files have been written. Missing indices, mismatched pass timestamps and FFmpeg errors fail preview generation and are recorded in `status.json`; existing PNGs and metadata remain available. Existing MP4s are not overwritten.
 
@@ -228,7 +273,12 @@ supports `python -m rov_sim --help`, `python -m rov_sim --validate-only`, tests,
 profile generation and offline analysis/validation with `requirements-tools.txt`.
 Use the selected Isaac bundled interpreter for simulation, camera-suite capture,
 renderer probes and the saved-scene verifiers (which load its USD libraries).
-No package installation is required.
+No package installation is required, except the optional Pixi workspace for MCAP
+recording. With `--record-mcap`, `rov_sim/rosbag/deps.py` applies a minimal overlay
+inside Kit's process after `SimulationApp` starts: it appends the Pixi `Library\bin`
+to `PATH`, prepends `<env>\Library` to `AMENT_PREFIX_PATH` and appends the Pixi
+`site-packages` to the end of `sys.path`. `launch.ps1`, `python.bat` and the shell
+environment are untouched, and Kit's NumPy stays the one loaded (checked).
 
 Absolute PowerShell script paths work from other directories. Scripts resolve
 relative config/evidence arguments against the repository and restore the
@@ -255,12 +305,16 @@ describe the original layout.
 | `rov_sim/environments/underwater.py` | Surface, deformation and verified RTX controls |
 | `rov_sim/experiments/change_detection.py` | Crate displacement and repeatable trajectory |
 | `rov_sim/recording.py`, `rov_sim/preview.py` | Unique directories, metadata, poses, paired PNGs and post-capture MP4s |
+| `rov_sim/rosbag/contract.py` | MCAP message contract: topics, QoS, stamps, CameraInfo, poses (standard library only) |
+| `rov_sim/rosbag/deps.py` | `--record-mcap` only: in-process Pixi overlay and checks on the loaded ROS 2 packages |
+| `rov_sim/rosbag/writer.py` | One rosbag2 MCAP bag per pass, its `status.json` state and the staging rename |
+| `rov_sim/rosbag/check.py` | Reopens a closed bag with rosbag2's reader and checks it against the contract |
 
 Add objects in `rov_sim/scenes/equipment.py` using `box`, `pipe` or USD references. Group meshes for each movable object under one Xform and change that parent between passes. Builders run once; do not add transform operations or recreate geometry in the render loop. Simple primitives/display colours preserve the original appearance; production inspection surfaces may need textures.
 
 Add robots under `rov_sim/robots/` with a metre-based carrier and separate model alignment/sensor mount. Add scenes/sensors by wiring their creation into `rov_sim.application.run()` after startup, extending CLI choices as needed. Sensors need explicit initialization and cleanup using installed APIs. Add experiments as simple pass-setup/trajectory functions under `rov_sim/experiments/`, register a CLI choice and select their sequence in `rov_sim/application.py`; export new ground truth via `PoseRecorder`.
 
-`legacy/rov_tank_builder.py` remains an unchanged legacy Script Editor template for comparison; the standalone app never imports it. Six reusable geometry/helper functions match the original Python AST exactly. No ROS 2 workspace is modified.
+`legacy/rov_tank_builder.py` remains an unchanged legacy Script Editor template for comparison; the standalone app never imports it. Six reusable geometry/helper functions match the original Python AST exactly. No ROS 2 workspace is modified; MCAP recording only loads NVIDIA's Pixi workspace.
 
 ## Checks and troubleshooting
 
@@ -287,6 +341,12 @@ python -m compileall -q rov_sim tests
 | Plain viewport lacks underwater tint | Inspect OceanSim preview windows or recorded PNGs; attenuation is separate from the water material. |
 | No visible legacy caustics | Select `tank_legacy.yaml`; check graphics API/render mode, refractive MDL, `light:enableCaustics`, light placement and floor illumination. Compare caustics on/off runs. |
 | Background images differ | Match config, trajectory, seed, phase and warmup; evaluate residual photon/denoiser history separately. |
+| `MCAP recording bootstrap: ROV_SIM_PIXI_ENV is not set` | Install the pinned Pixi workspace and set `ROV_SIM_PIXI_ENV` to `<workspace>\jazzy_ws\.pixi\envs\default`. |
+| `MCAP recording bootstrap: the Pixi environment is incomplete` | The named DLL or `site-packages\rosbag2_py` is missing: rerun `pixi install --locked` at tag `IsaacSim-6.1.0`, at a short root (MAX_PATH). |
+| `MCAP recording bootstrap: NumPy changed` | A Pixi package shadowed Kit's NumPy. Do not put Pixi `site-packages` on `PYTHONPATH` or run Kit under `pixi run`. |
+| `MCAP recording bootstrap: rclpy is already loaded from outside the Pixi environment` | Isaac's ROS 2 bridge extension loaded its bundled `rclpy`; disable that extension for `--record-mcap` runs. |
+| `MCAP recording bootstrap: unexpected rosbag2_py version` or `failed to import` | The Pixi lock or Isaac Sim changed. Reinstall the pinned tag, then repeat the first-bag check in `docs/VALIDATION.md`. |
+| `MCAP bag check failed` | Read `status.json` `mcap.<pass>.problems`; the bag is kept under `mcap/.staging/<pass>/` for diagnosis. |
 
 Sources: [OceanSim UW_Camera](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/sensors/UW_Camera.py), [WaterSurface](https://github.com/umfieldrobotics/OceanSim/blob/main/isaacsim/oceansim/watersurface/WaterSurface.py), [Isaac Sim 5.0 SimulationApp](https://docs.isaacsim.omniverse.nvidia.com/5.0.0/py/source/extensions/isaacsim.simulation_app/docs/index.html). Installed sources take precedence over newer upstream APIs.
 # Benchmarking processed stereo throughput

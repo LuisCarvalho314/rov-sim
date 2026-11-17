@@ -23,8 +23,17 @@ try {
     function Invoke-McapRun([string]$Name, [string[]]$RunArguments, [switch]$ExpectFailure) {
         $console = Join-Path $EvidenceRoot ($Name + '.log')
         $destination = Join-Path $EvidenceRoot $Name
-        & $runtime -u -m rov_sim @RunArguments --output-dir $destination *> $console
-        $code = $LASTEXITCODE
+        # Windows PowerShell 5.1 turns any native stderr line into a terminating error under 'Stop'.
+        # Python's faulthandler writes handled first-chance access violations there, so the console
+        # scan below decides instead.
+        $preference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & $runtime -u -m rov_sim @RunArguments --output-dir $destination *> $console
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $preference
+        }
         if (-not $ExpectFailure) {
             if ($code -ne 0) { throw "Runtime exited unsuccessfully ($code): $console" }
             $errors = @(Select-String -LiteralPath $console -Pattern '\[Error\]|Traceback \(most recent call last\)|Fatal Python error')
@@ -81,7 +90,8 @@ try {
     $env:ROV_SIM_PIXI_ENV = $PixiEnv
     if ($result.Status.state -ne 'failed') { throw "Expected state 'failed', found '$($result.Status.state)': $($result.Run)" }
     if ("$($result.Status.error)" -notlike '*MCAP recording bootstrap*') { throw "Bootstrap error not recorded: $($result.Run)" }
-    if (-not (Select-String -LiteralPath $result.Console -SimpleMatch 'Traceback (most recent call last)')) {
+    # PowerShell 5.1 wraps native stderr lines at the console width, splitting this marker.
+    if (-not (Select-String -LiteralPath $result.Console -SimpleMatch 'Traceback (most recent call')) {
         throw "No traceback in $($result.Console)"
     }
     Write-Output "VERIFIED bootstrap_failure (exit code $($result.ExitCode)) : $($result.Run)"
