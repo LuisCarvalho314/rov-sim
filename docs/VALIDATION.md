@@ -67,7 +67,10 @@ install):
 - from `rov_ws/src/rov_slam/scripts`, with that folder on `PYTHONPATH`,
   `read_pose_topic('<bag>', '/ground_truth/pose')` from `rov_evaluation.inputs` must return
   30 stamps and poses with frame `map` and no error (it returns `(stamps, poses, frame)`);
-- `rov_mapping` replay of Isaac bags is deferred: not tested by this change.
+- `ros2 launch rov_mapping reconstruct.launch.py`, then `ros2 bag play <bag> --clock-topics-all
+  --rate 0.5` (with the Fast DDS large-image profile from `rov_ws/docs/workflows/data-playback.md`):
+  `/mapping/ground_truth_cloud` must grow in `map` with no TF lookup errors. Restart both
+  mapping nodes before each replay.
 
 Repeat both after any Isaac Sim or Pixi workspace update before bags are used.
 

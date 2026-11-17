@@ -42,7 +42,7 @@ def parse_args(argv=None):
     parser.add_argument("--record-mcap", action="store_true",
                         help="Write one rosbag2 MCAP bag per pass (camera-sensor only; needs ROV_SIM_PIXI_ENV)")
     parser.add_argument("--mcap-storage", choices=("none", "zstd"),
-                        help="MCAP storage preset for --record-mcap: none (default) or zstd (rosbag2 zstd_fast)")
+                        help="MCAP storage preset for --record-mcap: zstd (default; rosbag2 zstd_fast) or none (uncompressed)")
     parser.add_argument("--_benchmark-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_benchmark-run-dir", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -76,7 +76,7 @@ def parse_args(argv=None):
             parser.error("--record-mcap requires --benchmark-mode full; other modes skip readback")
         if args.photometric_diagnostics:
             parser.error("Run --photometric-diagnostics separately from --record-mcap")
-        args.mcap_storage = args.mcap_storage or "none"
+        args.mcap_storage = args.mcap_storage or "zstd"
     return args
 
 

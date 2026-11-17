@@ -262,7 +262,8 @@ for name in sys.modules:
             for args in allowed:
                 with self.subTest(args=args):
                     self.assertEqual(run.main([*args, "--validate-only"]), 0)
-        self.assertEqual(run.parse_args(base).mcap_storage, "none")
+        self.assertEqual(run.parse_args(base).mcap_storage, "zstd")
+        self.assertEqual(run.parse_args([*base, "--mcap-storage", "none"]).mcap_storage, "none")
         self.assertIsNone(run.parse_args(["--headless"]).mcap_storage)
         self.assertFalse(run.parse_args(["--headless"]).record_mcap)
 

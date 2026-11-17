@@ -1,7 +1,8 @@
 # Isaac Sim stereo ground truth to MCAP
 
 *   **Author:** L.Carvalho
-*   **Status:** Proposed. Revised 2026-11-17: the writer is `rosbag2_py.SequentialWriter`
+*   **Status:** Implemented on `feature/isaac-mcap` (2026-11-17); both open questions resolved.
+*   **Previous status:** Proposed. Revised 2026-11-17: the writer is `rosbag2_py.SequentialWriter`
     in-process, chosen after measured evidence. Revised again 2026-11-17 after the overlay
     spike: the Pixi overlay is applied inside Kit's process, and `launch.ps1` is unchanged.
 *   **Date:** 2026-11-17
@@ -177,10 +178,12 @@ Three constraints shape the design:
 
 ## Open Questions
 
-*   **Default MCAP storage preset:** uncompressed (rosbag2's default) is provisional until Goal 7
-    reports. The author then picks the default, and removes `--mcap-storage` if one option is
-    clearly better.
-*   **`rov_mapping` replay:** tested with the first bag, or recorded in the brief as deferred.
+*   **Default MCAP storage preset:** *resolved 2026-11-17:* `zstd` (`zstd_fast`). Goal 7 measured
+    10.86 pairs/s and 1.03 MB per frame against 11.21 pairs/s and 2.17 MB uncompressed (12.27
+    with the flag off). Neither is better on both, so `--mcap-storage none` stays.
+*   **`rov_mapping` replay:** *resolved 2026-11-17:* tested. `reconstruct.launch.py` with
+    `ros2 bag play --clock-topics-all` mapped both an uncompressed and a `zstd` bag into `map`
+    with no TF lookup errors.
 
 ## Critical User Journeys (CUJs)
 
@@ -231,7 +234,7 @@ Three constraints shape the design:
 | ROS 2 libraries | NVIDIA's Pixi workspace `IsaacSim-ros_workspaces`, tag `IsaacSim-6.1.0` (commit `a9e8471`), `pixi install --locked`; the SHA-256 of `jazzy_ws/pixi.lock` is recorded. `pixi run build` is not needed. | NVIDIA's supported native Windows ROS 2; outside git, pinned. |
 | Overlay | **In-process, flag runs only:** after `SimulationApp` starts, `deps.py` appends `<env>\Library\bin` to `os.environ["PATH"]` (last, not first), prepends `<env>\Library` to `os.environ["AMENT_PREFIX_PATH"]`, and appends `<env>\Lib\site-packages` to the end of `sys.path`. `launch.ps1` is unchanged; no `CONDA_PREFIX`. | Measured in the overlay spike (below): it loads exactly the same DLLs as the launcher variant, and both `rov_ws` consumers accept its bag. Putting Pixi first on `PATH` is worse (Alternative M). Full `pixi run` activation broke Kit. `site-packages` cannot go on `PYTHONPATH`, because that would put Pixi's NumPy 2.5.1 before Kit's. |
 | Pixi environment location | Environment variable `ROV_SIM_PIXI_ENV` (path to `jazzy_ws\.pixi\envs\default`) | The same pattern as `ISAAC_SIM_PATH`; no machine paths in tracked files. |
-| Flag | `--record-mcap`, plus `--mcap-storage {none,zstd}` (default `none`) | CLI flags only, no config keys: a config key would change the `config.json` written to every run directory. `zstd` maps to rosbag2's `zstd_fast` preset. |
+| Flag | `--record-mcap`, plus `--mcap-storage {none,zstd}` (default `zstd`, decided after Goal 7) | CLI flags only, no config keys: a config key would change the `config.json` written to every run directory. `zstd` maps to rosbag2's `zstd_fast` preset. |
 | Backend rejection | In `cli.main`, after `--camera-backend` has been applied | The effective backend is known only after the override. |
 | Stamp epoch | `EPOCH_NS = 1_767_225_600 · 10⁹` (2026-01-01T00:00:00Z), the same for every pass | Non-zero; shows as a plausible date in tools. |
 | `/tf` | One `map → left_camera_optical_frame` transform per frame, equal to `/ground_truth/pose` | It passed the spike; a per-frame `map → left_camera_optical_frame` lets tools that follow `map` show the camera. |
@@ -757,7 +760,7 @@ reviewed and the author approves. Paths are relative to the rov-sim repository r
 *   **Type / Scope**: CLI parsing and validation, no Kit.
 *   **Proposed Changes**:
     *   **New arguments:** `--record-mcap` (store_true, help "Write one rosbag2 MCAP bag per pass
-        (camera-sensor only)"), and `--mcap-storage` (choices `none`, `zstd`; default `none`).
+        (camera-sensor only)"), and `--mcap-storage` (choices `none`, `zstd`; default `zstd` after Goal 7).
     *   **`parse_args`:** add the rejections from the "Flag rules" table that depend only on
         arguments (`--frames 0`, or no `--frames` without `--experiment` or `--headless`, which
         is the interactive default of 0 frames; `--startup-only`, a non-`full` `--benchmark-mode`,

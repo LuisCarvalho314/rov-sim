@@ -125,6 +125,8 @@ is read only by `--record-mcap` runs, inside Kit's process; it is trusted like
 | Log time = publish time | All 210 MCAP Message records of the first bag (read directly from the file) |
 | WSL `bag_to_capture` | 30 pairs extracted, exit 0; fx 537.143, cx/cy 375.5/239.5 |
 | WSL `read_pose_topic(bag, '/ground_truth/pose')` | 30 poses, frame `map`, first stamp 1767225600000000000 |
+| WSL `rov_mapping` replay (`reconstruct.launch.py`, `ros2 bag play --clock-topics-all --rate 0.5`) | Uncompressed 30-frame bag: 6 keyframes into `/mapping/ground_truth_cloud` in `map`, 2,704 confirmed points; `zstd` 40-frame bag: 8 keyframes, 3,188 confirmed points; no TF lookup errors |
+| `zstd` bags in WSL | 30-frame first bag with the `zstd` default (1.03 MB per frame): `bag_to_capture` 30 pairs (exit 0), `read_pose_topic` 30 poses in `map`, `rov_mapping` 6 keyframes (2,692 confirmed points); 40-frame benchmark bag: 40 pairs, 40 poses, 8 keyframes |
 | Flag off against tag `baseline/isaac-mcap` | `--validate-only` return codes and messages identical for 7 configs × 6 flag sets; a 12-frame `--record` run has identical file layout, `poses.jsonl`, `status.json` (times removed), manifest and calibration |
 
 Recording cost, `--benchmark --frames 40` change detection (80 measured CameraSensor
@@ -139,8 +141,8 @@ pairs, `configs/tank_photometric.yaml`), all three runs in one session:
 `recording_ms` covers the raw RGBA host copies, BGR conversion, serialization and
 writes; closing, checking and renaming the bag run after the measured frames. The
 earlier 12.8005 pairs/s row above is a 40-pair run from another session. `zstd` halves
-the disk use for about 4.7 ms more per frame; `none` stays the default until the author
-decides (design Goal 7). Python's faulthandler may print
+the disk use for about 4.7 ms more per frame, so it is the default (decided 2026-11-17);
+`--mcap-storage none` remains for runs where throughput matters more than disk. Python's faulthandler may print
 `Windows fatal exception: access violation` for exceptions that native code handles
 (also seen in flag-off runs and the overlay spike); the run's `status.json` is
 authoritative.

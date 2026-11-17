@@ -85,8 +85,9 @@ $env:ROV_SIM_PIXI_ENV = 'C:/IsaacSim-ros_workspaces/jazzy_ws/.pixi/envs/default'
 ```
 
 `--record-mcap` writes one bag per pass with rosbag2's own `SequentialWriter`
-inside Kit's process; `--mcap-storage zstd` selects rosbag2's `zstd_fast` preset
-(default `none`, uncompressed). It requires `--camera-backend camera-sensor`, a
+inside Kit's process, compressed with rosbag2's `zstd_fast` preset by default
+(about 1.03 MB per frame); `--mcap-storage none` writes uncompressed bags (about
+2.17 MB per frame) for about 3 % more throughput. It requires `--camera-backend camera-sensor`, a
 bounded pass (`--frames` above 0, `--headless` or `--experiment`) and full readback,
 and is rejected with `--startup-only` and `--photometric-diagnostics`. It may be
 combined with `--record`, `--preview-mp4`, `--benchmark` and `--stereo-diagnostics`.
