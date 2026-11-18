@@ -1,9 +1,11 @@
 # Isaac Sim stereo ground truth to MCAP
 
 *   **Author:** L.Carvalho
-*   **Status:** Proposed. Revised 2026-11-17: the writer is `rosbag2_py.SequentialWriter`
-    in-process, chosen after measured evidence. Revised again 2026-11-17 after the overlay
-    spike: the Pixi overlay is applied inside Kit's process, and `launch.ps1` is unchanged.
+*   **Status:** The in-process `rosbag2_py.SequentialWriter` and Pixi overlay shipped
+    in [PR #1](https://github.com/LuisCarvalho314/rov-sim/pull/1). This document
+    preserves the design and implementation plan. See the [README](../../README.md#launch-and-reproduce-change-detection)
+    for commands and [validation](../REPRODUCIBILITY.md#mcap-recording-pixi-workspace-2026-11-17)
+    for the tested configuration and results.
 *   **Date:** 2026-11-17
 *   **Sources:**
     *   [concepts brief](../../concepts_brief.md), the governing spec;
