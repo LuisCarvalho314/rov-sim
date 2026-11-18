@@ -1,0 +1,384 @@
+{
+  "runtime": {
+    "backend": "d3d12",
+    "renderer": "RealTimePathTracing",
+    "oceansim_extension": null,
+    "experience": null,
+    "extra_args": []
+  },
+  "simulation": {
+    "fps": 30,
+    "seed": 7,
+    "warmup_frames": 30,
+    "rt_subframes": 1,
+    "readiness_attempts": 30,
+    "headless_frames": 3600
+  },
+  "tank": {
+    "dimensions_m": [
+      8,
+      5,
+      3
+    ],
+    "wall_thickness_m": 0.2,
+    "colour": [
+      0.38,
+      0.42,
+      0.43
+    ]
+  },
+  "lighting": {
+    "positions_xy_m": [
+      [
+        -1.25,
+        -0.8
+      ],
+      [
+        1.8,
+        1
+      ]
+    ],
+    "height_above_tank_m": 0.35,
+    "size_m": [
+      2.2,
+      1.5
+    ],
+    "intensity": 950,
+    "colour": [
+      0.83,
+      0.92,
+      1
+    ],
+    "inspection_lights": [
+      {
+        "position_m": [
+          0.48,
+          -0.27,
+          0.15
+        ],
+        "rotation_xyz_deg": [
+          0,
+          -90,
+          0
+        ],
+        "size_m": [
+          0.12,
+          0.08
+        ],
+        "intensity": 60000
+      },
+      {
+        "position_m": [
+          0.48,
+          0.27,
+          0.15
+        ],
+        "rotation_xyz_deg": [
+          0,
+          -90,
+          0
+        ],
+        "size_m": [
+          0.12,
+          0.08
+        ],
+        "intensity": 60000
+      }
+    ]
+  },
+  "robot": {
+    "asset": "Bluerov/BROV_low.usd",
+    "position_m": [
+      -2.15,
+      0,
+      1.25
+    ],
+    "rotation_xyz_deg": [
+      0,
+      0,
+      0
+    ],
+    "model": {
+      "position_m": [
+        0,
+        0,
+        0
+      ],
+      "rotation_xyz_deg": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    }
+  },
+  "stereo": {
+    "resolution": [
+      752,
+      480
+    ],
+    "baseline_m": 0.38,
+    "focal_length_mm": 15,
+    "horizontal_aperture_mm": 21,
+    "clipping_range_m": [
+      0.05,
+      25
+    ],
+    "preview": true,
+    "mount": {
+      "position_m": [
+        0.45,
+        0,
+        0.05
+      ],
+      "rotation_xyz_deg": [
+        90,
+        0,
+        -90
+      ]
+    }
+  },
+  "underwater": {
+    "backscatter_value": [
+      0,
+      0.31,
+      0.24
+    ],
+    "atten_coeff": [
+      0.05,
+      0.05,
+      0.05
+    ],
+    "backscatter_coeff": [
+      0.05,
+      0.05,
+      0.2
+    ],
+    "max_range_m": 12,
+    "depth_noise_sigma": 0
+  },
+  "water": {
+    "height_m": 2.85,
+    "size_m": [
+      7.6,
+      4.6
+    ],
+    "grid_resolution": [
+      80,
+      50
+    ],
+    "cast_shadows": true,
+    "wave": {
+      "animated": true,
+      "amplitude_m": 0.06,
+      "initial_time_s": 0,
+      "wind_speed_m_s": 2,
+      "scale": 1
+    }
+  },
+  "rtx": {
+    "caustics": false,
+    "photon_count_multiplier": 40,
+    "photon_max_bounces": 4,
+    "filter_steps": 5,
+    "settings": {
+      "/rtx/post/tonemap/filmIso": 1600,
+      "/rtx/post/tonemap/op": 6,
+      "/rtx/post/tonemap/exposureTime": 0.02,
+      "/rtx/post/tonemap/fNumber": 5,
+      "/rtx/post/histogram/enabled": false
+    },
+    "antialiasing": 4
+  },
+  "changes": {
+    "before_position_m": [
+      3.2,
+      -1.7,
+      0.3
+    ],
+    "displacement_m": [
+      0,
+      0,
+      0
+    ]
+  },
+  "experiment": {
+    "frames_per_pass": 3600,
+    "trajectory": [
+      {
+        "frame": 0,
+        "position_m": [
+          -2.15,
+          0,
+          1.25
+        ],
+        "rotation_xyz_deg": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "orbit": {
+      "centre_xy_m": [
+        0,
+        0
+      ],
+      "radii_xy_m": [
+        2.15,
+        1.95
+      ],
+      "height_m": 1.25,
+      "vertical_amplitude_m": 0.2,
+      "start_angle_deg": 180,
+      "frames_per_revolution": 1800
+    }
+  },
+  "output": {
+    "directory": "outputs",
+    "record_images": false,
+    "preview": {
+      "enabled": false,
+      "fps": 30,
+      "codec": "libx264",
+      "crf": 20,
+      "preset": "medium",
+      "ffmpeg_executable": null
+    }
+  },
+  "scene": {
+    "layout": "box_pile",
+    "boxes": [
+      {
+        "name": "base_sw",
+        "position_m": [
+          -0.38,
+          -0.34,
+          0.25
+        ],
+        "size_m": [
+          0.68,
+          0.62,
+          0.5
+        ],
+        "colour": [
+          0.62,
+          0.29,
+          0.18
+        ]
+      },
+      {
+        "name": "base_se",
+        "position_m": [
+          0.38,
+          -0.34,
+          0.25
+        ],
+        "size_m": [
+          0.68,
+          0.62,
+          0.5
+        ],
+        "colour": [
+          0.27,
+          0.48,
+          0.6
+        ]
+      },
+      {
+        "name": "base_nw",
+        "position_m": [
+          -0.38,
+          0.34,
+          0.25
+        ],
+        "size_m": [
+          0.68,
+          0.62,
+          0.5
+        ],
+        "colour": [
+          0.61,
+          0.52,
+          0.27
+        ]
+      },
+      {
+        "name": "base_ne",
+        "position_m": [
+          0.38,
+          0.34,
+          0.25
+        ],
+        "size_m": [
+          0.68,
+          0.62,
+          0.5
+        ],
+        "colour": [
+          0.4,
+          0.55,
+          0.35
+        ]
+      },
+      {
+        "name": "middle_sw",
+        "position_m": [
+          -0.34,
+          -0.3,
+          0.74
+        ],
+        "size_m": [
+          0.58,
+          0.5,
+          0.48
+        ],
+        "colour": [
+          0.54,
+          0.38,
+          0.5
+        ]
+      },
+      {
+        "name": "middle_ne",
+        "position_m": [
+          0.34,
+          0.33,
+          0.74
+        ],
+        "size_m": [
+          0.56,
+          0.5,
+          0.48
+        ],
+        "colour": [
+          0.65,
+          0.55,
+          0.3
+        ]
+      },
+      {
+        "name": "top_sw",
+        "position_m": [
+          -0.3,
+          -0.25,
+          1.14
+        ],
+        "size_m": [
+          0.4,
+          0.36,
+          0.32
+        ],
+        "colour": [
+          0.32,
+          0.45,
+          0.58
+        ]
+      }
+    ]
+  }
+}
