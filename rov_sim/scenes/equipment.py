@@ -45,6 +45,33 @@ def build_fixed_equipment(stage):
             (0.80, 0.71, 0.38), collision=False)
 
 
+def build_box_pile(stage, specs):
+    """Build a fixed, textured pile without adding dynamics or new assets."""
+    accents = (
+        (0.95, 0.91, 0.64),
+        (0.12, 0.15, 0.19),
+        (0.94, 0.93, 0.88),
+    )
+    for i, spec in enumerate(specs):
+        name = spec["name"]
+        x, y, z = spec["position_m"]
+        sx, sy, sz = spec["size_m"]
+        base = f"/World/BoxPile/{name}"
+        box(stage, base, (x, y, z), (sx, sy, sz), spec["colour"])
+        accent = accents[i % len(accents)]
+        # Non-colliding contrasting bands create visual corners and features
+        # on all four sides for stereo SLAM and multi-view reconstruction.
+        for sign, suffix in ((-1, "minus"), (1, "plus")):
+            box(stage, f"{base}_stripe_x_{suffix}",
+                (x + sign * (sx / 2 + 0.005), y - 0.13 * sy, z + 0.05 * sz),
+                (0.01, 0.20 * sy, 0.46 * sz), accent, collision=False)
+            box(stage, f"{base}_stripe_y_{suffix}",
+                (x + 0.13 * sx, y + sign * (sy / 2 + 0.005), z - 0.06 * sz),
+                (0.20 * sx, 0.01, 0.46 * sz), accent, collision=False)
+        box(stage, f"{base}_stripe_top",
+            (x, y, z + sz / 2 + 0.005),
+            (0.52 * sx, 0.08 * sy, 0.01), accent, collision=False)
+
 def build_changed_object(stage, position):
     """A single movable parent Xform with multiple child meshes.
 
